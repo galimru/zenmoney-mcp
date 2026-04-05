@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/galimru/zenmoney-mcp/internal/runtime"
 	"github.com/galimru/zenmoney-mcp/store"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
@@ -27,7 +28,7 @@ func TestBuildLookupMaps(t *testing.T) {
 		},
 	}
 
-	maps := BuildLookupMaps(resp)
+	maps := runtime.BuildLookupMaps(resp)
 
 	tests := []struct {
 		name string
@@ -66,63 +67,16 @@ func TestBuildLookupMaps(t *testing.T) {
 	}
 }
 
-func TestClassifyTx(t *testing.T) {
-	acc1 := "account-1"
-	acc2 := "account-2"
-
-	tests := []struct {
-		name string
-		tx   models.Transaction
-		want string
-	}{
-		{
-			name: "expense",
-			tx:   models.Transaction{Income: 0, Outcome: 500, IncomeAccount: acc1, OutcomeAccount: &acc1},
-			want: "expense",
-		},
-		{
-			name: "income",
-			tx:   models.Transaction{Income: 1000, Outcome: 0, IncomeAccount: acc1, OutcomeAccount: &acc1},
-			want: "income",
-		},
-		{
-			name: "transfer",
-			tx:   models.Transaction{Income: 1000, Outcome: 1000, IncomeAccount: acc2, OutcomeAccount: &acc1},
-			want: "transfer",
-		},
-		{
-			name: "both nonzero same account (income wins)",
-			tx:   models.Transaction{Income: 500, Outcome: 500, IncomeAccount: acc1, OutcomeAccount: &acc1},
-			want: "income",
-		},
-		{
-			name: "no outcome account pointer",
-			tx:   models.Transaction{Income: 0, Outcome: 200, IncomeAccount: acc1, OutcomeAccount: nil},
-			want: "expense",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := classifyTx(tt.tx); got != tt.want {
-				t.Errorf("classifyTx() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLoadSyncState_ResetsOnTokenChange(t *testing.T) {
 	st := store.New(filepath.Join(t.TempDir(), "sync_state.json"))
-	sessA := newSyncSession("token-a", &mockZenClient{}, st)
-	if err := sessA.saveState(123); err != nil {
-		t.Fatalf("saveState: %v", err)
-	}
+	sessA := runtime.NewSession("token-a", &mockZenClient{}, st, nil)
+	_ = sessA.SaveServerTimestamp(123)
 
-	sessB := newSyncSession("token-b", &mockZenClient{
+	sessB := runtime.NewSession("token-b", &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			return models.Response{ServerTimestamp: 456}, nil
 		},
-	}, st)
+	}, st, nil)
 	resp, err := sessB.Incremental(context.Background())
 	if err != nil {
 		t.Fatalf("Incremental: %v", err)
@@ -132,7 +86,7 @@ func TestLoadSyncState_ResetsOnTokenChange(t *testing.T) {
 	}
 	if _, ok := st.Get(); ok {
 		state, _ := st.Get()
-		if state == nil || state.AuthFingerprint != authFingerprint("token-b") {
+		if state == nil || state.AuthFingerprint != runtime.AuthFingerprint("token-b") {
 			t.Fatal("expected state to be replaced for the new token")
 		}
 	}

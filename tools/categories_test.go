@@ -111,7 +111,8 @@ func TestHandleFindCategories_ReturnsSubstringMatches(t *testing.T) {
 	}
 	runtime := newTestRuntime(mc)
 
-	result, err := handleFindCategories(context.Background(), runtime, "foo", 20)
+	req := mcpReqWithArgs(map[string]any{"query": "foo", "limit": float64(20)})
+	result, err := handleFindCategories(context.Background(), runtime, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
@@ -132,7 +133,8 @@ func TestHandleFindCategories_WithoutQueryReturnsList(t *testing.T) {
 	}
 	runtime := newTestRuntime(mc)
 
-	result, err := handleFindCategories(context.Background(), runtime, "", 20)
+	req := mcpReqWithArgs(map[string]any{"limit": float64(20)})
+	result, err := handleFindCategories(context.Background(), runtime, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}

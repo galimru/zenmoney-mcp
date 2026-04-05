@@ -15,7 +15,7 @@
 
 ---
 
-Connect your AI assistant to ZenMoney. Search transactions, add and edit records, auto-categorize uncategorized activity, preview normalized imports, and commit them safely from the chat.
+Connect your AI assistant to ZenMoney. Search transactions, add and edit records, auto-categorize uncategorized activity, and import structured batches safely from the chat.
 
 ## Quick Start
 
@@ -66,6 +66,7 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 | Tool | What it does |
 |------|--------------|
 | `find_transactions` | Search transactions by date, account, category, amount, payee, query, or type and return paginated results |
+| `list_uncategorized_transactions` | List transactions without categories |
 | `add_transaction` | Create a transaction from type, date, amount, `account_id`, and optional category, payee, comment, currency, or `to_account_id` fields |
 | `edit_transaction` | Update a transaction by ID with optional field changes, using explicit account IDs for account changes and clear flags for payee, comment, or category |
 | `remove_transaction` | Delete a transaction by ID |
@@ -81,21 +82,21 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 | Tool | What it does |
 |------|--------------|
-| `categorize_transactions` | Preview or apply categories for existing transactions by IDs or search filters, with assisted categorization for unresolved items |
+| `suggest_transaction_categories` | Suggest categories for the given transaction IDs |
 
 ### Import workflow
 
 | Tool | What it does |
 |------|--------------|
-| `preview_transaction_import` | Validate and preview canonical transaction rows, using explicit account IDs, flag duplicates or invalid rows, and identify items that need review |
-| `commit_transaction_import` | Commit a previously previewed import plan sequentially and return created, skipped, and failed counts |
+| `import_transactions` | Import a structured batch of rows in one call; if any row is invalid, duplicate, or needs review, nothing is imported and the response returns invalid rows |
 
-### Example workflow — import normalized statement rows
+### Example workflow — import structured rows
 
 1. Use `find_accounts` to resolve the account ID you want to import into.
-2. Prepare canonical rows with fields such as `date`, `amount`, `type`, `payee`, `comment`, optional `category`, and `account_id`.
-3. Use `preview_transaction_import` to resolve names, detect duplicates, and see which rows need review.
-4. Review the preview, then call `commit_transaction_import` with the returned `import_plan_id`.
+2. Prepare structured rows with `date`, `amount`, `type`, and optional `payee`, `comment`, `category`, `to_account_id`, and `external_id`.
+3. Call `import_transactions` with `account_id` and `rows`.
+4. If the response says nothing was imported, review the returned row indexes and reasons, fix the rows, and retry the full batch.
+5. If the response says import succeeded, it returns only a compact summary with the imported count.
 
 ## Configuration
 
@@ -111,15 +112,13 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 ```json
 {
-  "transaction_limit": 100,
-  "max_bulk_operations": 20
+  "transaction_limit": 100
 }
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `transaction_limit` | No | Default page size for `find_transactions`. `0` is treated as the default value `100`. |
-| `max_bulk_operations` | No | Maximum number of rows accepted by `preview_transaction_import`. Must be ≤ 100. Default: `20`. |
 
 ## Notes
 

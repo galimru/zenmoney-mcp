@@ -7,28 +7,21 @@ import (
 	"path/filepath"
 )
 
-const (
-	defaultTransactionLimit  = 100
-	defaultMaxBulkOperations = 20
-)
+const defaultTransactionLimit = 100
 
 // Config holds user-editable settings persisted to disk.
 type Config struct {
-	// TransactionLimit is the default page size for list_transactions. Default: 100.
+	// TransactionLimit is the default page size for find_transactions. Default: 100.
 	TransactionLimit int `json:"transaction_limit"`
-	// MaxBulkOperations is the ceiling for a single prepare_bulk_operations call. Default: 20.
-	MaxBulkOperations int `json:"max_bulk_operations"`
 }
 
 func defaultConfig() *Config {
 	return &Config{
-		TransactionLimit:  defaultTransactionLimit,
-		MaxBulkOperations: defaultMaxBulkOperations,
+		TransactionLimit: defaultTransactionLimit,
 	}
 }
 
-// Load reads the config file, creating it with defaults if it does not exist, then reads
-// ZENMONEY_TOKEN and ZENMONEY_DEBUG from the environment.
+// Load reads the config file, creating it with defaults if it does not exist.
 func Load() (*Config, error) {
 	path := DefaultConfigPath()
 	cfg := defaultConfig()
@@ -49,21 +42,7 @@ func Load() (*Config, error) {
 	if cfg.TransactionLimit <= 0 {
 		cfg.TransactionLimit = defaultTransactionLimit
 	}
-	if cfg.MaxBulkOperations <= 0 {
-		cfg.MaxBulkOperations = defaultMaxBulkOperations
-	}
-
-	if err := cfg.validate(); err != nil {
-		return cfg, fmt.Errorf("config %s: %w", path, err)
-	}
 	return cfg, nil
-}
-
-func (c *Config) validate() error {
-	if c.MaxBulkOperations > 100 {
-		return fmt.Errorf("max_bulk_operations must be ≤ 100, got %d", c.MaxBulkOperations)
-	}
-	return nil
 }
 
 func save(path string, cfg *Config) error {

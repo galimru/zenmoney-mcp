@@ -7,6 +7,7 @@ import (
 
 	"github.com/galimru/zenmoney-mcp/client"
 	"github.com/galimru/zenmoney-mcp/internal/config"
+	"github.com/galimru/zenmoney-mcp/internal/runtime"
 	"github.com/galimru/zenmoney-mcp/store"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
@@ -58,22 +59,18 @@ func (m *mockZenClient) Suggest(ctx context.Context, tx models.Transaction) (mod
 	return tx, nil
 }
 
-// newTestRuntime creates a RuntimeProvider wired to a mock ZenClient and a unique temp store.
+// newTestRuntime creates a Provider wired to a mock ZenClient and a unique temp store.
 // Each call creates a fresh store in a new temp directory to prevent cross-test contamination.
-func newTestRuntime(mc *mockZenClient) *RuntimeProvider {
+func newTestRuntime(mc *mockZenClient) *runtime.Provider {
 	dir, _ := os.MkdirTemp("", "zenmoney-mcp-test-*")
-	p := &RuntimeProvider{
-		loadConfig: func() (*config.Config, error) {
-			return &config.Config{
-				TransactionLimit:  100,
-				MaxBulkOperations: 20,
-			}, nil
+	return runtime.NewProviderWithDeps(
+		func() (*config.Config, error) {
+			return &config.Config{TransactionLimit: 100}, nil
 		},
-		newZenClient: func(token string) (client.ZenClient, error) {
+		func(token string) (client.ZenClient, error) {
 			return mc, nil
 		},
-		zenStore: store.New(dir + "/sync_state.json"),
-	}
-	p.importPlans.data = make(map[string]*PreparedImportPlan)
-	return p
+		store.New(dir+"/sync_state.json"),
+		nil,
+	)
 }

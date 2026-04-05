@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/galimru/zenmoney-mcp/internal/runtime"
 	"github.com/galimru/zenmoney-mcp/tools"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -18,10 +19,11 @@ func main() {
 		server.WithToolCapabilities(false),
 	)
 
-	runtime := tools.NewRuntimeProvider()
-	tools.RegisterAccountTools(s, runtime)
-	tools.RegisterTransactionTools(s, runtime)
-	tools.RegisterCategoryTools(s, runtime)
+	p := runtime.NewProvider()
+	tools.RegisterAccountTools(s, p)
+	tools.RegisterTransactionTools(s, p)
+	tools.RegisterImportTools(s, p)
+	tools.RegisterCategoryTools(s, p)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

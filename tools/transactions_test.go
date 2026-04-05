@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/galimru/zenmoney-mcp/internal/transactions"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
 
@@ -12,6 +13,7 @@ func workflowSyncResponse() models.Response {
 	instr1 := int32(1)
 	instr2 := int32(2)
 	outcomeAcc := "account-1"
+	transferOutcomeAcc := "account-1"
 	return models.Response{
 		ServerTimestamp: 1000,
 		User:            []models.User{{ID: 42}},
@@ -51,6 +53,18 @@ func workflowSyncResponse() models.Response {
 				OutcomeInstrument: 1,
 				Payee:             "Coffee Shop",
 			},
+			{
+				ID:                "tx-uncategorized-transfer",
+				User:              42,
+				Date:              "2024-01-21",
+				Income:            50,
+				Outcome:           50,
+				IncomeAccount:     "account-2",
+				OutcomeAccount:    &transferOutcomeAcc,
+				IncomeInstrument:  2,
+				OutcomeInstrument: 1,
+				Payee:             "Transfer",
+			},
 		},
 	}
 }
@@ -66,7 +80,7 @@ func TestHandleAddTransaction_ResolvesAccountAndCategoryByTitle(t *testing.T) {
 			return models.Response{ServerTimestamp: 2000}, nil
 		},
 	}
-	runtime := newTestRuntime(mc)
+	p := newTestRuntime(mc)
 
 	req := mcpReqWithArgs(map[string]any{
 		"type":       "expense",
@@ -77,7 +91,7 @@ func TestHandleAddTransaction_ResolvesAccountAndCategoryByTitle(t *testing.T) {
 		"payee":      "Bakery",
 	})
 
-	result, err := handleAddTransaction(context.Background(), runtime, req)
+	result, err := handleAddTransaction(context.Background(), p, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
@@ -103,7 +117,7 @@ func TestHandleEditTransaction_ClearsCommentAndChangesType(t *testing.T) {
 			return models.Response{ServerTimestamp: 2000}, nil
 		},
 	}
-	runtime := newTestRuntime(mc)
+	p := newTestRuntime(mc)
 
 	req := mcpReqWithArgs(map[string]any{
 		"transaction_id": "tx-existing-food",
@@ -113,7 +127,7 @@ func TestHandleEditTransaction_ClearsCommentAndChangesType(t *testing.T) {
 		"clear_comment":  true,
 	})
 
-	result, err := handleEditTransaction(context.Background(), runtime, req)
+	result, err := handleEditTransaction(context.Background(), p, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
@@ -128,8 +142,41 @@ func TestHandleEditTransaction_ClearsCommentAndChangesType(t *testing.T) {
 	}
 }
 
-func TestHandleCategorizeTransactions_AutoApplySuggest(t *testing.T) {
-	var pushed []models.Transaction
+func TestHandleEditTransaction_UpdatesPayeeAndComment(t *testing.T) {
+	var pushed models.Transaction
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			resp := workflowSyncResponse()
+			comment := "old note"
+			resp.Transaction[0].Comment = &comment
+			return resp, nil
+		},
+		pushFn: func(ctx context.Context, req models.Request) (models.Response, error) {
+			pushed = req.Transaction[0]
+			return models.Response{ServerTimestamp: 2000}, nil
+		},
+	}
+	p := newTestRuntime(mc)
+
+	req := mcpReqWithArgs(map[string]any{
+		"transaction_id": "tx-existing-food",
+		"payee":          "New Bakery",
+		"comment":        "fresh note",
+	})
+
+	result, err := handleEditTransaction(context.Background(), p, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+	if pushed.Payee != "New Bakery" {
+		t.Fatalf("Payee = %q, want New Bakery", pushed.Payee)
+	}
+	if pushed.Comment == nil || *pushed.Comment != "fresh note" {
+		t.Fatalf("Comment = %#v, want fresh note", pushed.Comment)
+	}
+}
+
+func TestHandleSuggestTransactionCategories_ReturnsSuggestions(t *testing.T) {
 	mc := &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			return workflowSyncResponse(), nil
@@ -138,163 +185,62 @@ func TestHandleCategorizeTransactions_AutoApplySuggest(t *testing.T) {
 			tx.Tag = []string{"tag-food"}
 			return tx, nil
 		},
-		pushFn: func(ctx context.Context, req models.Request) (models.Response, error) {
-			pushed = req.Transaction
-			return models.Response{ServerTimestamp: 2000}, nil
-		},
 	}
-	runtime := newTestRuntime(mc)
+	p := newTestRuntime(mc)
 
 	req := mcpReqWithArgs(map[string]any{
 		"transaction_ids": "[\"tx-uncategorized\"]",
-		"auto_apply":      true,
-		"dry_run":         false,
 	})
 
-	result, err := handleCategorizeTransactions(context.Background(), runtime, req)
-	if err != nil || result.IsError {
-		t.Fatalf("unexpected error: %v / %v", err, result)
-	}
-	if len(pushed) != 1 || len(pushed[0].Tag) != 1 || pushed[0].Tag[0] != "tag-food" {
-		t.Fatalf("pushed tags = %#v, want tag-food", pushed)
-	}
-
-	var out categorizeResponse
-	if err := json.Unmarshal([]byte(resultText(t, result)), &out); err != nil {
-		t.Fatalf("parse result: %v", err)
-	}
-	if out.Applied != 1 || out.NeedsReview != 0 {
-		t.Fatalf("response counts = %+v, want applied=1 needs_review=0", out)
-	}
-}
-
-func TestHandlePreviewTransactionImport_ClassifiesDuplicateAndStoresPlan(t *testing.T) {
-	mc := &mockZenClient{
-		fullSyncFn: func(ctx context.Context) (models.Response, error) {
-			return workflowSyncResponse(), nil
-		},
-		suggestFn: func(ctx context.Context, tx models.Transaction) (models.Transaction, error) {
-			tx.Tag = []string{"tag-food"}
-			return tx, nil
-		},
-	}
-	runtime := newTestRuntime(mc)
-
-	items := []map[string]any{
-		{
-			"date":       "2024-01-15",
-			"amount":     500.0,
-			"type":       "expense",
-			"account_id": "account-1",
-			"payee":      "McDonalds",
-		},
-		{
-			"date":       "2024-04-02",
-			"amount":     120.0,
-			"type":       "expense",
-			"account_id": "account-1",
-			"payee":      "Coffee Shop",
-		},
-	}
-	raw, _ := json.Marshal(items)
-
-	req := mcpReqWithArgs(map[string]any{
-		"items": string(raw),
-	})
-
-	result, err := handlePreviewTransactionImport(context.Background(), runtime, req)
+	result, err := handleSuggestTransactionCategories(context.Background(), p, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
 
-	var out importPreviewResponse
+	var out transactions.SuggestCategoriesResponse
 	if err := json.Unmarshal([]byte(resultText(t, result)), &out); err != nil {
 		t.Fatalf("parse result: %v", err)
 	}
-	if out.ExactDuplicates != 1 || out.ReadyToImport != 1 {
-		t.Fatalf("preview counts = %+v, want exact_duplicates=1 ready_to_import=1", out)
+	if out.Ready != 1 || out.NeedsReview != 0 || out.Skipped != 0 {
+		t.Fatalf("response counts = %+v, want ready=1 needs_review=0 skipped=0", out)
 	}
-	if runtime.takeImportPlan(out.ImportPlanID) == nil {
-		t.Fatal("expected import plan to be stored")
+	if len(out.Items) != 1 {
+		t.Fatalf("items = %+v, want one item", out.Items)
+	}
+	if out.Items[0].Transaction.ID != "tx-uncategorized" {
+		t.Fatalf("transaction id = %q, want tx-uncategorized", out.Items[0].Transaction.ID)
+	}
+	if len(out.Items[0].SuggestedCategories) != 1 || out.Items[0].SuggestedCategories[0] != "Food" {
+		t.Fatalf("suggested categories = %#v, want [Food]", out.Items[0].SuggestedCategories)
+	}
+	if out.Items[0].Status != "ready" {
+		t.Fatalf("status = %q, want ready", out.Items[0].Status)
 	}
 }
 
-func TestHandleAddTransaction_RejectsAccountTitlesForWrites(t *testing.T) {
+func TestHandleListUncategorizedTransactions_ExcludesTransfers(t *testing.T) {
 	mc := &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			return workflowSyncResponse(), nil
 		},
 	}
-	runtime := newTestRuntime(mc)
+	p := newTestRuntime(mc)
 
-	req := mcpReqWithArgs(map[string]any{
-		"type":    "expense",
-		"date":    "2024-04-01",
-		"amount":  float64(250),
-		"account": "Cash",
-	})
+	req := mcpReqWithArgs(map[string]any{})
 
-	result, err := handleAddTransaction(context.Background(), runtime, req)
-	if err != nil {
-		t.Fatalf("unexpected Go error: %v", err)
-	}
-	if !result.IsError {
-		t.Fatal("expected tool error for account title in write operation")
-	}
-	if !contains(resultText(t, result), "account_id") {
-		t.Fatalf("expected account_id guidance, got: %s", resultText(t, result))
-	}
-}
-
-func TestHandleCommitTransactionImport_CommitsOnlyReadyRows(t *testing.T) {
-	var pushed []models.Transaction
-	mc := &mockZenClient{
-		fullSyncFn: func(ctx context.Context) (models.Response, error) {
-			return workflowSyncResponse(), nil
-		},
-		pushFn: func(ctx context.Context, req models.Request) (models.Response, error) {
-			pushed = append(pushed, req.Transaction...)
-			return models.Response{ServerTimestamp: 2000}, nil
-		},
-	}
-	runtime := newTestRuntime(mc)
-
-	runtime.storeImportPlan("plan-1", &PreparedImportPlan{
-		Rows: []plannedImportRow{
-			{
-				Preview: importPreviewRow{Index: 0, Status: "new"},
-				Tx: &models.Transaction{
-					ID:                "new-tx",
-					User:              42,
-					Date:              "2024-04-10",
-					Outcome:           100,
-					IncomeAccount:     "account-1",
-					OutcomeAccount:    strPtr("account-1"),
-					IncomeInstrument:  1,
-					OutcomeInstrument: 1,
-				},
-			},
-			{
-				Preview: importPreviewRow{Index: 1, Status: "exact_duplicate"},
-			},
-		},
-		ReadyToImport:   1,
-		ExactDuplicates: 1,
-	})
-
-	result, err := handleCommitTransactionImport(context.Background(), runtime, "plan-1")
+	result, err := handleListUncategorizedTransactions(context.Background(), p, req)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
-	if len(pushed) != 1 || pushed[0].ID != "new-tx" {
-		t.Fatalf("pushed = %#v, want one new transaction", pushed)
-	}
 
-	var out importCommitResponse
+	var out transactions.PaginatedTransactions
 	if err := json.Unmarshal([]byte(resultText(t, result)), &out); err != nil {
 		t.Fatalf("parse result: %v", err)
 	}
-	if out.Created != 1 || out.SkippedExact != 1 {
-		t.Fatalf("commit response = %+v, want created=1 skipped_exact=1", out)
+	if out.Total != 1 || len(out.Items) != 1 {
+		t.Fatalf("response = %+v, want one uncategorized non-transfer", out)
+	}
+	if out.Items[0].ID != "tx-uncategorized" {
+		t.Fatalf("returned %q, want tx-uncategorized", out.Items[0].ID)
 	}
 }

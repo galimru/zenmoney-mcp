@@ -1,9 +1,10 @@
-package tools
+package runtime
 
 import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/galimru/zenmoney-mcp/client"
@@ -12,64 +13,44 @@ import (
 )
 
 var (
-	scopeAccounts = []models.EntityType{
+	ScopeAccounts = []models.EntityType{
 		models.EntityTypeAccount,
 		models.EntityTypeInstrument,
 	}
-	scopeTags = []models.EntityType{
+	ScopeTags = []models.EntityType{
 		models.EntityTypeTag,
 	}
-	scopeTagsWithUser = []models.EntityType{
+	ScopeTagsWithUser = []models.EntityType{
 		models.EntityTypeTag,
 		models.EntityTypeUser,
 	}
-	scopeMerchants = []models.EntityType{
-		models.EntityTypeMerchant,
-	}
-	scopeBudgets = []models.EntityType{
-		models.EntityTypeBudget,
-		models.EntityTypeTag,
-	}
-	scopeReminders = []models.EntityType{
-		models.EntityTypeReminder,
-		models.EntityTypeAccount,
-		models.EntityTypeTag,
-	}
-	scopeInstruments = []models.EntityType{
-		models.EntityTypeInstrument,
-	}
-	scopeTransactionsRead = []models.EntityType{
+	ScopeTransactionsRead = []models.EntityType{
 		models.EntityTypeTransaction,
 		models.EntityTypeAccount,
 		models.EntityTypeTag,
 		models.EntityTypeInstrument,
 	}
-	scopeTransactionsWrite = []models.EntityType{
+	ScopeTransactionsWrite = []models.EntityType{
 		models.EntityTypeTransaction,
 		models.EntityTypeAccount,
 		models.EntityTypeInstrument,
 		models.EntityTypeTag,
 		models.EntityTypeUser,
-	}
-	scopeTransactionCreate = []models.EntityType{
-		models.EntityTypeAccount,
-		models.EntityTypeInstrument,
-		models.EntityTypeUser,
-		models.EntityTypeTag,
 	}
 )
 
-type syncSession struct {
+type Session struct {
 	client client.ZenClient
 	store  *store.Store
 	token  string
+	logger *slog.Logger
 }
 
-func newSyncSession(token string, c client.ZenClient, st *store.Store) *syncSession {
-	return &syncSession{client: c, store: st, token: token}
+func NewSession(token string, c client.ZenClient, st *store.Store, logger *slog.Logger) *Session {
+	return &Session{client: c, store: st, token: token, logger: logger}
 }
 
-func (s *syncSession) Incremental(ctx context.Context) (models.Response, error) {
+func (s *Session) Incremental(ctx context.Context) (models.Response, error) {
 	state, err := s.loadState()
 	if err != nil {
 		return models.Response{}, err
@@ -86,12 +67,12 @@ func (s *syncSession) Incremental(ctx context.Context) (models.Response, error) 
 	}
 
 	if err := s.saveState(resp.ServerTimestamp); err != nil {
-		fmt.Printf("warning: failed to save sync state: %v\n", err)
+		s.warn("failed to save sync state", err)
 	}
 	return resp, nil
 }
 
-func (s *syncSession) Full(ctx context.Context) (models.Response, error) {
+func (s *Session) Full(ctx context.Context) (models.Response, error) {
 	if err := s.store.Reset(); err != nil {
 		return models.Response{}, fmt.Errorf("reset sync state: %w", err)
 	}
@@ -106,7 +87,7 @@ func (s *syncSession) Full(ctx context.Context) (models.Response, error) {
 	return resp, nil
 }
 
-func (s *syncSession) Fetch(ctx context.Context, scope []models.EntityType) (models.Response, error) {
+func (s *Session) Fetch(ctx context.Context, scope []models.EntityType) (models.Response, error) {
 	state, err := s.loadState()
 	if err != nil {
 		return models.Response{}, err
@@ -118,7 +99,7 @@ func (s *syncSession) Fetch(ctx context.Context, scope []models.EntityType) (mod
 			return models.Response{}, fmt.Errorf("sync: %w", err)
 		}
 		if err := s.saveState(resp.ServerTimestamp); err != nil {
-			fmt.Printf("warning: failed to save sync state: %v\n", err)
+			s.warn("failed to save sync state", err)
 		}
 		return resp, nil
 	}
@@ -132,12 +113,12 @@ func (s *syncSession) Fetch(ctx context.Context, scope []models.EntityType) (mod
 		return models.Response{}, fmt.Errorf("sync: %w", err)
 	}
 	if err := s.saveState(resp.ServerTimestamp); err != nil {
-		fmt.Printf("warning: failed to save sync state: %v\n", err)
+		s.warn("failed to save sync state", err)
 	}
 	return resp, nil
 }
 
-func (s *syncSession) CurrentServerTimestamp() int {
+func (s *Session) CurrentServerTimestamp() int {
 	state, err := s.loadState()
 	if err != nil || state == nil {
 		return 0
@@ -145,14 +126,22 @@ func (s *syncSession) CurrentServerTimestamp() int {
 	return state.ServerTimestamp
 }
 
-func (s *syncSession) SaveServerTimestamp(serverTimestamp int) {
+func (s *Session) SaveServerTimestamp(serverTimestamp int) error {
 	if serverTimestamp <= 0 {
-		return
+		return nil
 	}
-	_ = s.saveState(serverTimestamp)
+	return s.saveState(serverTimestamp)
 }
 
-func (s *syncSession) loadState() (*store.SyncState, error) {
+func AuthFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func (s *Session) loadState() (*store.SyncState, error) {
 	cached, ok := s.store.Get()
 	if !ok {
 		loaded, err := s.store.Load()
@@ -165,7 +154,7 @@ func (s *syncSession) loadState() (*store.SyncState, error) {
 		return nil, nil
 	}
 
-	want := authFingerprint(s.token)
+	want := AuthFingerprint(s.token)
 	if cached.AuthFingerprint != "" && cached.AuthFingerprint != want {
 		if err := s.store.Reset(); err != nil {
 			return nil, fmt.Errorf("reset sync state: %w", err)
@@ -175,18 +164,16 @@ func (s *syncSession) loadState() (*store.SyncState, error) {
 	return cached, nil
 }
 
-func (s *syncSession) saveState(serverTimestamp int) error {
+func (s *Session) saveState(serverTimestamp int) error {
 	return s.store.Save(&store.SyncState{
 		ServerTimestamp: serverTimestamp,
-		AuthFingerprint: authFingerprint(s.token),
+		AuthFingerprint: AuthFingerprint(s.token),
 		LastSyncAt:      time.Now(),
 	})
 }
 
-func authFingerprint(token string) string {
-	if token == "" {
-		return ""
+func (s *Session) warn(msg string, err error) {
+	if s.logger != nil {
+		s.logger.Warn(msg, "error", err)
 	}
-	sum := sha256.Sum256([]byte(token))
-	return fmt.Sprintf("%x", sum[:8])
 }

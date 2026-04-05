@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/galimru/zenmoney-mcp/internal/runtime"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
@@ -20,7 +21,7 @@ type accountResult struct {
 	InBalance bool     `json:"in_balance"`
 }
 
-func toAccountResult(acc models.Account, maps LookupMaps) accountResult {
+func toAccountResult(acc models.Account, maps runtime.LookupMaps) accountResult {
 	currency := ""
 	if acc.Instrument != nil {
 		currency = maps.InstrumentSymbol(int(*acc.Instrument))
@@ -37,7 +38,7 @@ func toAccountResult(acc models.Account, maps LookupMaps) accountResult {
 }
 
 // RegisterAccountTools adds list_accounts and find_accounts to the MCP server.
-func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
+func RegisterAccountTools(s *server.MCPServer, p *runtime.Provider) {
 	s.AddTool(
 		mcp.NewTool("list_accounts",
 			mcp.WithDescription("Fetch and list current financial accounts from ZenMoney. Archived accounts are hidden by default."),
@@ -47,7 +48,7 @@ func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			showArchived := req.GetBool("show_archived", false)
-			return handleListAccounts(ctx, runtime, showArchived)
+			return handleListAccounts(ctx, p, showArchived)
 		},
 	)
 
@@ -65,13 +66,13 @@ func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			query := req.GetString("query", "")
 			limit := int(req.GetFloat("limit", 20))
-			return handleFindAccounts(ctx, runtime, query, limit)
+			return handleFindAccounts(ctx, p, query, limit)
 		},
 	)
 }
 
-func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, showArchived bool) (*mcp.CallToolResult, error) {
-	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
+func handleListAccounts(ctx context.Context, p *runtime.Provider, showArchived bool) (*mcp.CallToolResult, error) {
+	resp, maps, err := p.ScopedSync(ctx, runtime.ScopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -84,14 +85,10 @@ func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, showArchi
 		results = append(results, toAccountResult(acc, maps))
 	}
 
-	out, err := structJSON(results)
-	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-	return out, nil
+	return structJSON(results)
 }
 
-func handleFindAccounts(ctx context.Context, runtime *RuntimeProvider, query string, limit int) (*mcp.CallToolResult, error) {
+func handleFindAccounts(ctx context.Context, p *runtime.Provider, query string, limit int) (*mcp.CallToolResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return mcp.NewToolResultError("query is required"), nil
@@ -103,7 +100,7 @@ func handleFindAccounts(ctx context.Context, runtime *RuntimeProvider, query str
 		limit = 100
 	}
 
-	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
+	resp, maps, err := p.ScopedSync(ctx, runtime.ScopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}

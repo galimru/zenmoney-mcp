@@ -32,27 +32,13 @@ func TestLoad_CreatesDefaultsOnMissingFile(t *testing.T) {
 	}
 }
 
-func TestConfig_ValidateMaxBulkOperationsLimit(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.MaxBulkOperations = 101
-	if err := cfg.validate(); err == nil {
-		t.Error("expected error for MaxBulkOperations > 100")
-	}
-}
-
 func TestConfig_ZeroValuesFilledWithDefaults(t *testing.T) {
 	// A config with zero values should have defaults applied after load.
-	cfg := &Config{TransactionLimit: 0, MaxBulkOperations: 0}
+	cfg := &Config{TransactionLimit: 0}
 	if cfg.TransactionLimit <= 0 {
 		cfg.TransactionLimit = defaultTransactionLimit
 	}
-	if cfg.MaxBulkOperations <= 0 {
-		cfg.MaxBulkOperations = defaultMaxBulkOperations
-	}
 	if cfg.TransactionLimit != defaultTransactionLimit {
 		t.Errorf("TransactionLimit = %d, want %d", cfg.TransactionLimit, defaultTransactionLimit)
-	}
-	if cfg.MaxBulkOperations != defaultMaxBulkOperations {
-		t.Errorf("MaxBulkOperations = %d, want %d", cfg.MaxBulkOperations, defaultMaxBulkOperations)
 	}
 }
