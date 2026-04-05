@@ -5,18 +5,19 @@ import (
 	"os"
 	"time"
 
-	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 	"github.com/galimru/zenmoney-mcp/client"
 	"github.com/galimru/zenmoney-mcp/internal/config"
 	"github.com/galimru/zenmoney-mcp/store"
+	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
 
 // mockZenClient implements client.ZenClient for testing.
 type mockZenClient struct {
-	fullSyncFn   func(ctx context.Context) (models.Response, error)
-	syncSinceFn  func(ctx context.Context, since time.Time) (models.Response, error)
-	pushFn       func(ctx context.Context, req models.Request) (models.Response, error)
-	suggestFn    func(ctx context.Context, tx models.Transaction) (models.Transaction, error)
+	fullSyncFn  func(ctx context.Context) (models.Response, error)
+	syncSinceFn func(ctx context.Context, since time.Time) (models.Response, error)
+	syncFn      func(ctx context.Context, req models.Request) (models.Response, error)
+	pushFn      func(ctx context.Context, req models.Request) (models.Response, error)
+	suggestFn   func(ctx context.Context, tx models.Transaction) (models.Transaction, error)
 }
 
 func (m *mockZenClient) FullSync(ctx context.Context) (models.Response, error) {
@@ -30,12 +31,17 @@ func (m *mockZenClient) SyncSince(ctx context.Context, since time.Time) (models.
 	if m.syncSinceFn != nil {
 		return m.syncSinceFn(ctx, since)
 	}
-	// Default: fall back to FullSync behaviour so tests that call a handler multiple times
-	// still see data on the second call (which triggers SyncSince after state is saved).
-	if m.fullSyncFn != nil {
+	return models.Response{ServerTimestamp: 2000}, nil
+}
+
+func (m *mockZenClient) Sync(ctx context.Context, req models.Request) (models.Response, error) {
+	if m.syncFn != nil {
+		return m.syncFn(ctx, req)
+	}
+	if req.ServerTimestamp == 0 && m.fullSyncFn != nil {
 		return m.fullSyncFn(ctx)
 	}
-	return models.Response{ServerTimestamp: 2000}, nil
+	return models.Response{ServerTimestamp: req.ServerTimestamp + 1000}, nil
 }
 
 func (m *mockZenClient) Push(ctx context.Context, req models.Request) (models.Response, error) {

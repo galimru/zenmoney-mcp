@@ -14,6 +14,8 @@ type SyncState struct {
 	// ServerTimestamp is the Unix epoch second returned by ZenMoney as serverTimestamp.
 	// Passed as serverTimestamp in the next sync request to fetch only newer changes.
 	ServerTimestamp int `json:"server_timestamp"`
+	// AuthFingerprint identifies the token/account context that produced this state.
+	AuthFingerprint string `json:"auth_fingerprint,omitempty"`
 	// LastSyncAt is the wall-clock time of the most recent sync (diagnostic only).
 	LastSyncAt time.Time `json:"last_sync_at"`
 }

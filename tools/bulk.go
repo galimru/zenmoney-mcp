@@ -10,14 +10,13 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
-	"github.com/galimru/zenmoney-mcp/store"
 )
 
 // RegisterBulkTools adds prepare_bulk_operations and execute_bulk_operations to the MCP server.
 func RegisterBulkTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("prepare_bulk_operations",
-			mcp.WithDescription(`Validate and preview multiple transaction operations (create, update, delete) without committing them. Returns an enriched preview of all changes and a preparation_id. Pass the preparation_id to execute_bulk_operations to commit. Limit to 20 operations per call; split larger batches.
+			mcp.WithDescription(`Fetch current ZenMoney transaction/account/tag state, then validate and preview multiple transaction operations (create, update, delete) without committing them. Returns an enriched preview of all changes and a preparation_id. Pass the preparation_id to execute_bulk_operations to commit. Limit to 20 operations per call; split larger batches.
 
 Each operation in the "operations" array must have an "operation" field: "create", "update", or "delete".
 
@@ -44,7 +43,7 @@ Example:
 
 	s.AddTool(
 		mcp.NewTool("execute_bulk_operations",
-			mcp.WithDescription("Execute a previously prepared bulk operation. Commits the validated changes to ZenMoney and returns a summary."),
+			mcp.WithDescription("Execute a previously prepared bulk operation, commit the validated changes to ZenMoney, and return a summary."),
 			mcp.WithString("preparation_id",
 				mcp.Required(),
 				mcp.Description("The preparation_id returned by prepare_bulk_operations"),
@@ -82,12 +81,12 @@ type deletePair struct {
 }
 
 type prepareResponse struct {
-	PreparationID        string              `json:"preparation_id"`
-	Created              int                 `json:"created"`
-	Updated              int                 `json:"updated"`
-	Deleted              int                 `json:"deleted"`
-	Transactions         []transactionResult `json:"transactions"`
-	DeletedTransactions  []transactionResult `json:"deleted_transactions"`
+	PreparationID       string              `json:"preparation_id"`
+	Created             int                 `json:"created"`
+	Updated             int                 `json:"updated"`
+	Deleted             int                 `json:"deleted"`
+	Transactions        []transactionResult `json:"transactions"`
+	DeletedTransactions []transactionResult `json:"deleted_transactions"`
 }
 
 type executeResponse struct {
@@ -99,11 +98,6 @@ type executeResponse struct {
 }
 
 func handlePrepareBulk(ctx context.Context, runtime *RuntimeProvider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
 	cfg, err := runtime.config()
 	if err != nil {
 		return runtimeError(err), nil
@@ -127,7 +121,7 @@ func handlePrepareBulk(ctx context.Context, runtime *RuntimeProvider, req mcp.Ca
 		return mcp.NewToolResultError(fmt.Sprintf("too many operations: %d (max %d)", len(rawOps), cfg.MaxBulkOperations)), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTransactionsWrite)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -206,11 +200,11 @@ func handlePrepareBulk(ctx context.Context, runtime *RuntimeProvider, req mcp.Ca
 
 	prepID := uuid.New().String()
 	runtime.storePreparation(prepID, &PreparedBulk{
-		ToPush:  prep.txItems,
+		ToPush:   prep.txItems,
 		ToDelete: prep.toDelete,
-		Created: prep.created,
-		Updated: prep.updated,
-		Deleted: prep.deleted,
+		Created:  prep.created,
+		Updated:  prep.updated,
+		Deleted:  prep.deleted,
 	})
 
 	txPreviews := make([]transactionResult, len(prep.txItems))
@@ -252,7 +246,7 @@ func handleExecuteBulk(ctx context.Context, runtime *RuntimeProvider, prepID str
 		return runtimeError(err), nil
 	}
 
-	serverTS := currentServerTimestamp(runtime.zenStore)
+	serverTS := runtime.currentServerTimestamp()
 	var txResults []transactionResult
 	var delResults []transactionResult
 
@@ -268,7 +262,7 @@ func handleExecuteBulk(ctx context.Context, runtime *RuntimeProvider, prepID str
 		}
 		if pushResp.ServerTimestamp > 0 {
 			serverTS = pushResp.ServerTimestamp
-			_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: serverTS, LastSyncAt: time.Now()})
+			runtime.saveServerTimestamp(serverTS)
 		}
 		for _, item := range bulk.ToPush {
 			txResults = append(txResults, item.preview)
@@ -298,7 +292,7 @@ func handleExecuteBulk(ctx context.Context, runtime *RuntimeProvider, prepID str
 			return mcp.NewToolResultError(fmt.Sprintf("delete transactions: %v", err)), nil
 		}
 		if pushResp.ServerTimestamp > 0 {
-			_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: pushResp.ServerTimestamp, LastSyncAt: time.Now()})
+			runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 		}
 	}
 
@@ -347,6 +341,9 @@ func buildTransactionFromRaw(raw json.RawMessage, maps LookupMaps, userID int) (
 	if p.Date == "" {
 		return models.Transaction{}, fmt.Errorf("date is required")
 	}
+	if _, err := time.Parse("2006-01-02", p.Date); err != nil {
+		return models.Transaction{}, fmt.Errorf("invalid date %q: use YYYY-MM-DD", p.Date)
+	}
 	if p.AccountID == "" {
 		return models.Transaction{}, fmt.Errorf("account_id is required")
 	}
@@ -380,6 +377,9 @@ func buildTransactionFromRaw(raw json.RawMessage, maps LookupMaps, userID int) (
 	if p.TagIDs != "" {
 		if err := json.Unmarshal([]byte(p.TagIDs), &tagIDs); err != nil {
 			return models.Transaction{}, fmt.Errorf("invalid tag_ids: %w", err)
+		}
+		if err := validateTagIDs(tagIDs, maps); err != nil {
+			return models.Transaction{}, err
 		}
 	}
 
@@ -453,6 +453,9 @@ func applyUpdateFromRaw(raw json.RawMessage, existing models.Transaction, maps L
 	tx.Changed = int(time.Now().Unix())
 
 	if _, ok := raw2["date"]; ok && p.Date != "" {
+		if _, err := time.Parse("2006-01-02", p.Date); err != nil {
+			return models.Transaction{}, fmt.Errorf("invalid date %q: use YYYY-MM-DD", p.Date)
+		}
 		tx.Date = p.Date
 	}
 
@@ -477,12 +480,19 @@ func applyUpdateFromRaw(raw json.RawMessage, existing models.Transaction, maps L
 		if _, exists := maps.Accounts[p.AccountID]; !exists {
 			return models.Transaction{}, fmt.Errorf("account %q not found", p.AccountID)
 		}
+		instrID, ok := maps.AccountInstrument(p.AccountID)
+		if !ok {
+			instrID = 0
+		}
 		switch txType {
 		case "expense", "income":
 			tx.IncomeAccount = p.AccountID
 			tx.OutcomeAccount = &p.AccountID
+			tx.IncomeInstrument = instrID
+			tx.OutcomeInstrument = instrID
 		case "transfer":
 			tx.OutcomeAccount = &p.AccountID
+			tx.OutcomeInstrument = instrID
 		}
 	}
 
@@ -491,12 +501,18 @@ func applyUpdateFromRaw(raw json.RawMessage, existing models.Transaction, maps L
 			return models.Transaction{}, fmt.Errorf("to_account %q not found", p.ToAccountID)
 		}
 		tx.IncomeAccount = p.ToAccountID
+		if instrID, ok := maps.AccountInstrument(p.ToAccountID); ok {
+			tx.IncomeInstrument = instrID
+		}
 	}
 
 	if _, ok := raw2["tag_ids"]; ok && p.TagIDs != "" {
 		var tagIDs []string
 		if err := json.Unmarshal([]byte(p.TagIDs), &tagIDs); err != nil {
 			return models.Transaction{}, fmt.Errorf("invalid tag_ids: %w", err)
+		}
+		if err := validateTagIDs(tagIDs, maps); err != nil {
+			return models.Transaction{}, err
 		}
 		tx.Tag = tagIDs
 	}

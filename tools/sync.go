@@ -8,14 +8,13 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
-	"github.com/galimru/zenmoney-mcp/store"
 )
 
 // RegisterSyncTools adds the sync and full_sync tools to the MCP server.
 func RegisterSyncTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("sync",
-			mcp.WithDescription("Perform an incremental sync with ZenMoney, fetching only changes since the last sync. Returns counts of received entities."),
+			mcp.WithDescription("Perform an incremental diff sync with ZenMoney and return counts of entities changed since the last sync."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleSync(ctx, runtime)
@@ -24,7 +23,7 @@ func RegisterSyncTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("full_sync",
-			mcp.WithDescription("Perform a full sync, discarding cached sync state and re-downloading all ZenMoney data. Use this to resolve inconsistencies or on first run."),
+			mcp.WithDescription("Discard cached sync state, perform a full ZenMoney sync, and return counts for the full fetched dataset. Use this to resolve inconsistencies or on first run."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleFullSync(ctx, runtime)
@@ -33,12 +32,7 @@ func RegisterSyncTools(s *server.MCPServer, runtime *RuntimeProvider) {
 }
 
 func handleSync(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, _, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, _, err := runtime.incrementalSync(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -51,25 +45,9 @@ func handleSync(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolRes
 }
 
 func handleFullSync(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
+	resp, err := runtime.fullSync(ctx)
 	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	if err := runtime.zenStore.Reset(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("reset sync state: %v", err)), nil
-	}
-
-	resp, err := c.FullSync(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("full sync failed: %v", err)), nil
-	}
-
-	if err := runtime.zenStore.Save(&store.SyncState{
-		ServerTimestamp: resp.ServerTimestamp,
-		LastSyncAt:      time.Now(),
-	}); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("save sync state: %v", err)), nil
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	result, err := structJSON(buildSyncCountResult(resp))
@@ -96,12 +74,4 @@ func pushTagRequest(serverTimestamp int, tags []models.Tag) models.Request {
 		ServerTimestamp:        serverTimestamp,
 		Tag:                    tags,
 	}
-}
-
-// currentServerTimestamp returns the cached server timestamp, or 0 if unavailable.
-func currentServerTimestamp(st *store.Store) int {
-	if state, ok := st.Get(); ok && state != nil {
-		return state.ServerTimestamp
-	}
-	return 0
 }

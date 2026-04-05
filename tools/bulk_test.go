@@ -15,7 +15,7 @@ func bulkSyncResponse() models.Response {
 	return models.Response{
 		ServerTimestamp: 1000,
 		User:            []models.User{{ID: 42}},
-		Instrument: []models.Instrument{{ID: 1, Symbol: "₽"}},
+		Instrument:      []models.Instrument{{ID: 1, Symbol: "₽"}},
 		Account: []models.Account{
 			{ID: "account-1", Title: "Cash", Instrument: &instr1},
 		},
@@ -175,5 +175,70 @@ func TestPrepareBulk_ExecuteConsumesPreparedSet(t *testing.T) {
 	result2, _ := handleExecuteBulk(context.Background(), runtime, prepResp.PreparationID)
 	if !result2.IsError {
 		t.Error("second execute should fail with not-found error")
+	}
+}
+
+func TestPrepareBulk_UpdateRecomputesTransferInstruments(t *testing.T) {
+	instr1 := int32(1)
+	instr2 := int32(2)
+	outcomeAcc := "account-1"
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{
+				ServerTimestamp: 1000,
+				User:            []models.User{{ID: 42}},
+				Instrument: []models.Instrument{
+					{ID: 1, Symbol: "₽"},
+					{ID: 2, Symbol: "$"},
+				},
+				Account: []models.Account{
+					{ID: "account-1", Title: "Cash", Instrument: &instr1},
+					{ID: "account-2", Title: "USD", Instrument: &instr2},
+				},
+				Transaction: []models.Transaction{
+					{
+						ID:                "tx-existing",
+						User:              42,
+						Date:              "2024-01-01",
+						Outcome:           100,
+						Income:            100,
+						IncomeAccount:     "account-2",
+						OutcomeAccount:    &outcomeAcc,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+					},
+				},
+			}, nil
+		},
+	}
+	runtime := newTestRuntime(mc)
+
+	ops := []map[string]any{
+		{
+			"operation":     "update",
+			"id":            "tx-existing",
+			"to_account_id": "account-2",
+		},
+	}
+	opsJSON, _ := json.Marshal(ops)
+	req := mcpReqWithArgs(map[string]any{"operations": string(opsJSON)})
+
+	result, err := handlePrepareBulk(context.Background(), runtime, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+
+	text := resultText(t, result)
+	var prepResp prepareResponse
+	if err := json.Unmarshal([]byte(text), &prepResp); err != nil {
+		t.Fatalf("parse prepare response: %v", err)
+	}
+	bulk := runtime.takePreparation(prepResp.PreparationID)
+	if bulk == nil || len(bulk.ToPush) != 1 {
+		t.Fatal("expected prepared bulk item")
+	}
+	tx := bulk.ToPush[0].tx
+	if tx.IncomeAccount != "account-2" || tx.IncomeInstrument != 2 {
+		t.Fatalf("income side = %q/%d, want account-2/2", tx.IncomeAccount, tx.IncomeInstrument)
 	}
 }

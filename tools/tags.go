@@ -10,7 +10,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
-	"github.com/galimru/zenmoney-mcp/store"
 )
 
 type tagResult struct {
@@ -39,7 +38,7 @@ func toTagResult(tag models.Tag, maps LookupMaps) tagResult {
 func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("list_tags",
-			mcp.WithDescription("List all transaction category tags."),
+			mcp.WithDescription("Fetch and list current transaction category tags from ZenMoney."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleListTags(ctx, runtime)
@@ -48,7 +47,7 @@ func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("find_tag",
-			mcp.WithDescription("Find a category tag by title (case-insensitive). Returns the first match."),
+			mcp.WithDescription("Fetch current category tags from ZenMoney and return the first title match (case-insensitive)."),
 			mcp.WithString("title",
 				mcp.Required(),
 				mcp.Description("Tag title to search for"),
@@ -62,7 +61,7 @@ func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("create_tag",
-			mcp.WithDescription("Create a new category tag (also used for expense/income categories). Idempotent: returns the existing tag if one with the same title already exists (case-insensitive)."),
+			mcp.WithDescription("Fetch current tags from ZenMoney, then create a new category tag if needed. Idempotent: returns the existing tag if one with the same title already exists (case-insensitive)."),
 			mcp.WithString("title",
 				mcp.Required(),
 				mcp.Description("Tag title"),
@@ -85,12 +84,7 @@ func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
 }
 
 func handleListTags(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTags)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -108,12 +102,7 @@ func handleListTags(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToo
 }
 
 func handleFindTag(ctx context.Context, runtime *RuntimeProvider, title string) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTags)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -141,7 +130,7 @@ func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.Call
 		return runtimeError(err), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTagsWithUser)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -204,13 +193,13 @@ func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.Call
 		Required:      requiredPtr,
 	}
 
-	pushResp, err := c.Push(ctx, pushTagRequest(currentServerTimestamp(runtime.zenStore), []models.Tag{newTag}))
+	pushResp, err := c.Push(ctx, pushTagRequest(runtime.currentServerTimestamp(), []models.Tag{newTag}))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("create tag: %v", err)), nil
 	}
 
 	if pushResp.ServerTimestamp > 0 {
-		_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: pushResp.ServerTimestamp, LastSyncAt: time.Now()})
+		runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 	}
 
 	// Add new tag to maps for parent resolution in response.

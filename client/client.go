@@ -18,6 +18,9 @@ type ZenClient interface {
 	// SyncSince fetches only changes since the given timestamp (incremental sync).
 	SyncSince(ctx context.Context, since time.Time) (models.Response, error)
 
+	// Sync sends an explicit diff request.
+	Sync(ctx context.Context, req models.Request) (models.Response, error)
+
 	// Push sends new/updated/deleted entities to ZenMoney and receives the server's
 	// response (which may include additional server-side changes). This is used for all
 	// write operations: create, update, and delete.
@@ -53,8 +56,12 @@ func (c *Client) SyncSince(ctx context.Context, since time.Time) (models.Respons
 	return c.sdk.SyncSince(ctx, since)
 }
 
-func (c *Client) Push(ctx context.Context, req models.Request) (models.Response, error) {
+func (c *Client) Sync(ctx context.Context, req models.Request) (models.Response, error) {
 	return c.sdk.Sync(ctx, req)
+}
+
+func (c *Client) Push(ctx context.Context, req models.Request) (models.Response, error) {
+	return c.Sync(ctx, req)
 }
 
 func (c *Client) Suggest(ctx context.Context, tx models.Transaction) (models.Transaction, error) {

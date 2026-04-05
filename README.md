@@ -48,6 +48,8 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
+To get your API token, open [https://zerro.app/token](https://zerro.app/token), log in with your ZenMoney account, and copy the token shown on the page.
+
 The config file `~/.config/zenmoney-mcp/config.json` is created on first run with defaults. No manual setup required beyond the token.
 
 ## Tools
@@ -56,55 +58,55 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 | Tool | What it does |
 |------|--------------|
-| `sync` | Incremental sync — fetches only changes since the last sync |
-| `full_sync` | Full sync — resets cached state and re-downloads all data; use to resolve inconsistencies or on first run |
+| `sync` | Incremental diff sync — fetches only entities changed since the last sync |
+| `full_sync` | Full sync — resets cached sync state and re-downloads the full dataset; use to resolve inconsistencies or on first run |
 
 ### Accounts
 
 | Tool | What it does |
 |------|--------------|
-| `list_accounts` | List financial accounts; set `active_only=true` to exclude archived |
-| `find_account` | Find an account by title (case-insensitive, returns first match) |
+| `list_accounts` | Fetch and list current financial accounts from ZenMoney; set `active_only=true` to exclude archived |
+| `find_account` | Fetch current accounts from ZenMoney and return the first title match (case-insensitive) |
 
 ### Transactions
 
 | Tool | What it does |
 |------|--------------|
-| `list_transactions` | List transactions with optional filters; returns `{items, total, offset, limit}` |
-| `create_transaction` | Create a new transaction; supports transfers via `to_account_id` |
-| `update_transaction` | Update an existing transaction by ID; only provided fields are changed |
-| `delete_transaction` | Delete a transaction by ID; returns the deleted record for confirmation |
+| `list_transactions` | Fetch current transactions from ZenMoney and return filtered results as `{items, total, offset, limit}`; `query` searches across both payee and comment |
+| `create_transaction` | Fetch current account/tag data from ZenMoney, then create a new transaction; supports transfers via `to_account_id` |
+| `update_transaction` | Fetch the current transaction from ZenMoney, apply only the provided changes, and update it by ID |
+| `delete_transaction` | Fetch the current transaction from ZenMoney, delete it by ID, and return the deleted record for confirmation |
 
 ### Tags (Categories)
 
 | Tool | What it does |
 |------|--------------|
-| `list_tags` | List all category tags |
-| `find_tag` | Find a tag by title (case-insensitive, returns first match) |
-| `create_tag` | Create a category tag; idempotent — returns existing tag if title already exists |
+| `list_tags` | Fetch and list current category tags from ZenMoney |
+| `find_tag` | Fetch current tags from ZenMoney and return the first title match (case-insensitive) |
+| `create_tag` | Fetch current tags from ZenMoney, then create a category tag if needed; idempotent — returns an existing tag if the title already exists |
 
 ### Reference data
 
 | Tool | What it does |
 |------|--------------|
-| `list_merchants` | List all merchants (payees / counterparties) |
-| `list_budgets` | List monthly budgets; optionally filter by month (`YYYY-MM`) |
-| `list_reminders` | List all recurring transaction reminders |
-| `list_instruments` | List currency instruments with current exchange rates |
-| `get_instrument` | Get a specific currency instrument by numeric ID |
+| `list_merchants` | Fetch and list current merchants (payees / counterparties) from ZenMoney |
+| `list_budgets` | Fetch current monthly budgets from ZenMoney; optionally filter by month (`YYYY-MM`) |
+| `list_reminders` | Fetch and list current recurring transaction reminders from ZenMoney |
+| `list_instruments` | Fetch and list current currency instruments with exchange rates from ZenMoney |
+| `get_instrument` | Fetch current instruments from ZenMoney and return the one matching a numeric ID |
 
 ### Categorisation
 
 | Tool | What it does |
 |------|--------------|
-| `suggest_category` | Suggest a category tag for a transaction based on payee and/or comment |
+| `suggest_category` | Suggest a category tag for a transaction based on payee and/or comment, resolving returned tag IDs against current ZenMoney categories |
 
 ### Bulk operations
 
 | Tool | What it does |
 |------|--------------|
-| `prepare_bulk_operations` | Validate and preview up to 20 create/update/delete operations without committing; returns a `preparation_id` |
-| `execute_bulk_operations` | Commit a previously prepared bulk operation; returns a summary |
+| `prepare_bulk_operations` | Fetch current transaction/account/tag state from ZenMoney, then validate and preview up to 20 create/update/delete operations without committing; returns a `preparation_id` |
+| `execute_bulk_operations` | Commit a previously prepared bulk operation to ZenMoney; returns a summary |
 
 ### Example workflow — import a bank statement
 
@@ -140,7 +142,8 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 ## Notes
 
-- Sync state is cached in `~/.config/zenmoney-mcp/sync_state.json`. Delete it to force a clean full sync on next run.
+- Read and lookup tools fetch current data from ZenMoney as needed; they do not rely only on the raw output of the last incremental `sync` call.
+- Sync state is cached in `~/.config/zenmoney-mcp/sync_state.json` and is scoped to the configured API token. Delete it to force a clean full sync on next run.
 - This project is not affiliated with ZenMoney or its parent company.
 
 ## Contributing

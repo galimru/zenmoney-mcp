@@ -13,6 +13,7 @@ func TestStore_SaveAndLoad(t *testing.T) {
 
 	state := &SyncState{
 		ServerTimestamp: 12345,
+		AuthFingerprint: "abc123",
 		LastSyncAt:      time.Now().UTC().Truncate(time.Second),
 	}
 
@@ -31,6 +32,9 @@ func TestStore_SaveAndLoad(t *testing.T) {
 	}
 	if loaded.ServerTimestamp != 12345 {
 		t.Errorf("ServerTimestamp = %d, want 12345", loaded.ServerTimestamp)
+	}
+	if loaded.AuthFingerprint != "abc123" {
+		t.Errorf("AuthFingerprint = %q, want abc123", loaded.AuthFingerprint)
 	}
 
 	// File should be 0600.

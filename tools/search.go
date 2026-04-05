@@ -13,7 +13,7 @@ import (
 func RegisterSearchTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("suggest_category",
-			mcp.WithDescription("Suggest a category tag for a transaction based on payee and/or comment. Returns suggested tag names. Note: ZenMoney does not provide confidence scores."),
+			mcp.WithDescription("Suggest a category tag for a transaction based on payee and/or comment, resolving returned tag IDs against current ZenMoney categories. ZenMoney does not provide confidence scores."),
 			mcp.WithString("payee", mcp.Description("Payee name")),
 			mcp.WithString("comment", mcp.Description("Transaction comment")),
 		),
@@ -26,7 +26,7 @@ func RegisterSearchTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("get_instrument",
-			mcp.WithDescription("Get a specific currency instrument by its numeric ID."),
+			mcp.WithDescription("Fetch current currency instruments from ZenMoney and return the one matching the numeric ID."),
 			mcp.WithNumber("id",
 				mcp.Required(),
 				mcp.Description("Numeric instrument ID"),
@@ -55,7 +55,7 @@ func handleSuggestCategory(ctx context.Context, runtime *RuntimeProvider, payee,
 	}
 
 	// Fetch lookup maps so we can resolve tag IDs to names.
-	_, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	_, maps, err := runtime.scopedSync(ctx, scopeTags)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -93,12 +93,7 @@ func handleGetInstrument(ctx context.Context, runtime *RuntimeProvider, id int) 
 		return mcp.NewToolResultError("id must be a positive integer"), nil
 	}
 
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, _, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, _, err := runtime.scopedSync(ctx, scopeInstruments)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}

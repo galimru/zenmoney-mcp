@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,8 +8,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
-	"github.com/galimru/zenmoney-mcp/client"
-	"github.com/galimru/zenmoney-mcp/store"
 )
 
 // LookupMaps resolves integer and UUID IDs to human-readable names for tool responses.
@@ -83,41 +80,13 @@ func (m LookupMaps) AccountInstrument(accountID string) (int, bool) {
 	return id, ok
 }
 
-// fetchSyncResponse triggers an incremental sync if sync state exists, or a full sync
-// if not. It saves the new server timestamp to the store and returns the response and
-// built lookup maps. All tool handlers should call this to get fresh data.
-func fetchSyncResponse(ctx context.Context, c client.ZenClient, st *store.Store) (models.Response, LookupMaps, error) {
-	// Try to load persisted state if we don't have it in memory.
-	cached, ok := st.Get()
-	if !ok {
-		loaded, err := st.Load()
-		if err != nil {
-			return models.Response{}, LookupMaps{}, fmt.Errorf("load sync state: %w", err)
+func validateTagIDs(tagIDs []string, maps LookupMaps) error {
+	for _, tagID := range tagIDs {
+		if _, ok := maps.Tags[tagID]; !ok {
+			return fmt.Errorf("tag %q not found", tagID)
 		}
-		cached = loaded
 	}
-
-	var resp models.Response
-	var err error
-	if cached != nil && cached.ServerTimestamp > 0 {
-		resp, err = c.SyncSince(ctx, time.Unix(int64(cached.ServerTimestamp), 0))
-	} else {
-		resp, err = c.FullSync(ctx)
-	}
-	if err != nil {
-		return models.Response{}, LookupMaps{}, fmt.Errorf("sync: %w", err)
-	}
-
-	if err := st.Save(&store.SyncState{
-		ServerTimestamp: resp.ServerTimestamp,
-		LastSyncAt:      time.Now(),
-	}); err != nil {
-		// Non-fatal: we have fresh data even if we can't persist the timestamp.
-		fmt.Printf("warning: failed to save sync state: %v\n", err)
-	}
-
-	maps := BuildLookupMaps(resp)
-	return resp, maps, nil
+	return nil
 }
 
 // classifyTx infers the transaction type from its fields.

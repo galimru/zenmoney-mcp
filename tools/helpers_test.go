@@ -1,8 +1,11 @@
 package tools
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/galimru/zenmoney-mcp/store"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
 
@@ -105,6 +108,33 @@ func TestClassifyTx(t *testing.T) {
 				t.Errorf("classifyTx() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadSyncState_ResetsOnTokenChange(t *testing.T) {
+	st := store.New(filepath.Join(t.TempDir(), "sync_state.json"))
+	sessA := newSyncSession("token-a", &mockZenClient{}, st)
+	if err := sessA.saveState(123); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	sessB := newSyncSession("token-b", &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{ServerTimestamp: 456}, nil
+		},
+	}, st)
+	resp, err := sessB.Incremental(context.Background())
+	if err != nil {
+		t.Fatalf("Incremental: %v", err)
+	}
+	if resp.ServerTimestamp != 456 {
+		t.Fatalf("ServerTimestamp = %d, want 456", resp.ServerTimestamp)
+	}
+	if _, ok := st.Get(); ok {
+		state, _ := st.Get()
+		if state == nil || state.AuthFingerprint != authFingerprint("token-b") {
+			t.Fatal("expected state to be replaced for the new token")
+		}
 	}
 }
 

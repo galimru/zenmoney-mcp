@@ -12,7 +12,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
-	"github.com/galimru/zenmoney-mcp/store"
 )
 
 // RegisterTransactionTools adds list_transactions, create_transaction, update_transaction,
@@ -20,11 +19,12 @@ import (
 func RegisterTransactionTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("list_transactions",
-			mcp.WithDescription("List transactions with optional filters. Returns {items, total, offset, limit}."),
+			mcp.WithDescription("Fetch current transactions from ZenMoney and return filtered results with pagination as {items, total, offset, limit}. Use query for case-insensitive text search across payee and comment."),
 			mcp.WithString("date_from", mcp.Description("Start date inclusive (YYYY-MM-DD)")),
 			mcp.WithString("date_to", mcp.Description("End date inclusive (YYYY-MM-DD)")),
 			mcp.WithString("account_id", mcp.Description("Filter by account ID")),
 			mcp.WithString("tag_id", mcp.Description("Filter by tag ID")),
+			mcp.WithString("query", mcp.Description("Case-insensitive substring search across payee and comment")),
 			mcp.WithString("payee", mcp.Description("Filter by payee (case-insensitive substring)")),
 			mcp.WithString("merchant_id", mcp.Description("Filter by merchant ID")),
 			mcp.WithNumber("min_amount", mcp.Description("Minimum amount (income or outcome)")),
@@ -42,7 +42,7 @@ func RegisterTransactionTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("create_transaction",
-			mcp.WithDescription("Create a new financial transaction. For transfers, provide to_account_id. Currency instruments are auto-resolved from the account unless overridden."),
+			mcp.WithDescription("Fetch current account and tag data from ZenMoney, then create a new financial transaction. For transfers, provide to_account_id. Currency instruments are auto-resolved from the account unless overridden."),
 			mcp.WithString("transaction_type",
 				mcp.Required(),
 				mcp.Description("Transaction type: expense, income, or transfer"),
@@ -84,7 +84,7 @@ func RegisterTransactionTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("update_transaction",
-			mcp.WithDescription("Update an existing transaction by ID. Only provided fields are changed. Use empty string for payee or comment to clear them."),
+			mcp.WithDescription("Fetch the current transaction from ZenMoney, apply the provided changes, and update it by ID. Use empty string for payee or comment to clear them."),
 			mcp.WithString("id",
 				mcp.Required(),
 				mcp.Description("Transaction UUID to update"),
@@ -107,7 +107,7 @@ func RegisterTransactionTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("delete_transaction",
-			mcp.WithDescription("Delete a transaction by ID. Returns details of the deleted transaction for confirmation."),
+			mcp.WithDescription("Fetch the current transaction from ZenMoney, delete it by ID, and return its details for confirmation."),
 			mcp.WithString("id",
 				mcp.Required(),
 				mcp.Description("Transaction UUID to delete"),
@@ -128,17 +128,12 @@ type paginatedTransactions struct {
 }
 
 func handleListTransactions(ctx context.Context, runtime *RuntimeProvider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
 	cfg, err := runtime.config()
 	if err != nil {
 		return runtimeError(err), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTransactionsRead)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -148,6 +143,7 @@ func handleListTransactions(ctx context.Context, runtime *RuntimeProvider, req m
 	dateTo := req.GetString("date_to", "")
 	accountID := req.GetString("account_id", "")
 	tagID := req.GetString("tag_id", "")
+	query := strings.ToLower(req.GetString("query", ""))
 	payeeFilter := req.GetString("payee", "")
 	merchantID := req.GetString("merchant_id", "")
 	minAmount := req.GetFloat("min_amount", 0)
@@ -191,6 +187,15 @@ func handleListTransactions(ctx context.Context, runtime *RuntimeProvider, req m
 		}
 		if tagID != "" && !containsStringFold(tx.Tag, tagID) {
 			continue
+		}
+		if query != "" {
+			comment := ""
+			if tx.Comment != nil {
+				comment = *tx.Comment
+			}
+			if !strings.Contains(strings.ToLower(tx.Payee), query) && !strings.Contains(strings.ToLower(comment), query) {
+				continue
+			}
 		}
 		if payeeFilter != "" && !strings.Contains(strings.ToLower(tx.Payee), strings.ToLower(payeeFilter)) {
 			continue
@@ -268,7 +273,7 @@ func handleCreateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		return runtimeError(err), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTransactionCreate)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -335,6 +340,9 @@ func handleCreateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		if err := json.Unmarshal([]byte(raw), &tagIDs); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("invalid tag_ids: %v", err)), nil
 		}
+		if err := validateTagIDs(tagIDs, maps); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 	}
 
 	payee := req.GetString("payee", "")
@@ -384,13 +392,13 @@ func handleCreateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		return mcp.NewToolResultError(fmt.Sprintf("unknown transaction_type %q: use expense, income, or transfer", txType)), nil
 	}
 
-	pushResp, err := c.Push(ctx, pushRequest(currentServerTimestamp(runtime.zenStore), []models.Transaction{tx}))
+	pushResp, err := c.Push(ctx, pushRequest(runtime.currentServerTimestamp(), []models.Transaction{tx}))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("create transaction: %v", err)), nil
 	}
 
 	if pushResp.ServerTimestamp > 0 {
-		_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: pushResp.ServerTimestamp, LastSyncAt: time.Now()})
+		runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 	}
 
 	// Rebuild maps from push response to get updated instrument info, then shape result.
@@ -429,7 +437,7 @@ func handleUpdateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		return mcp.NewToolResultError("id is required"), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTransactionsWrite)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -477,12 +485,19 @@ func handleUpdateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		if _, ok := maps.Accounts[accountID]; !ok {
 			return mcp.NewToolResultError(fmt.Sprintf("account %q not found", accountID)), nil
 		}
+		instrID, ok := maps.AccountInstrument(accountID)
+		if !ok {
+			instrID = 0
+		}
 		switch txType {
 		case "expense", "income":
 			tx.IncomeAccount = accountID
 			tx.OutcomeAccount = &accountID
+			tx.IncomeInstrument = instrID
+			tx.OutcomeInstrument = instrID
 		case "transfer":
 			tx.OutcomeAccount = &accountID
+			tx.OutcomeInstrument = instrID
 		}
 	}
 
@@ -491,12 +506,18 @@ func handleUpdateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 			return mcp.NewToolResultError(fmt.Sprintf("to_account %q not found", toAccountID)), nil
 		}
 		tx.IncomeAccount = toAccountID
+		if instrID, ok := maps.AccountInstrument(toAccountID); ok {
+			tx.IncomeInstrument = instrID
+		}
 	}
 
 	if raw := req.GetString("tag_ids", ""); raw != "" {
 		var tagIDs []string
 		if err := json.Unmarshal([]byte(raw), &tagIDs); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("invalid tag_ids: %v", err)), nil
+		}
+		if err := validateTagIDs(tagIDs, maps); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 		tx.Tag = tagIDs
 	}
@@ -512,13 +533,13 @@ func handleUpdateTransaction(ctx context.Context, runtime *RuntimeProvider, req 
 		}
 	}
 
-	pushResp, err := c.Push(ctx, pushRequest(currentServerTimestamp(runtime.zenStore), []models.Transaction{tx}))
+	pushResp, err := c.Push(ctx, pushRequest(runtime.currentServerTimestamp(), []models.Transaction{tx}))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("update transaction: %v", err)), nil
 	}
 
 	if pushResp.ServerTimestamp > 0 {
-		_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: pushResp.ServerTimestamp, LastSyncAt: time.Now()})
+		runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 	}
 
 	out, err := structJSON(shapeTransaction(tx, maps))
@@ -538,7 +559,7 @@ func handleDeleteTransaction(ctx context.Context, runtime *RuntimeProvider, txID
 		return runtimeError(err), nil
 	}
 
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeTransactionsWrite)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -573,13 +594,13 @@ func handleDeleteTransaction(ctx context.Context, runtime *RuntimeProvider, txID
 		Date:              existing.Date,
 	}
 
-	pushResp, err := c.Push(ctx, pushRequest(currentServerTimestamp(runtime.zenStore), []models.Transaction{deletionTx}))
+	pushResp, err := c.Push(ctx, pushRequest(runtime.currentServerTimestamp(), []models.Transaction{deletionTx}))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("delete transaction: %v", err)), nil
 	}
 
 	if pushResp.ServerTimestamp > 0 {
-		_ = runtime.zenStore.Save(&store.SyncState{ServerTimestamp: pushResp.ServerTimestamp, LastSyncAt: time.Now()})
+		runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 	}
 
 	type deleteResult struct {

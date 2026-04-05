@@ -247,3 +247,190 @@ func TestHandleListTransactions_TypeFilter(t *testing.T) {
 		t.Errorf("expected expense, got %s", page.Items[0].Type)
 	}
 }
+
+func TestHandleListTransactions_QueryMatchesCommentOrPayee(t *testing.T) {
+	instr1 := int32(1)
+	acc1 := "account-1"
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{
+				ServerTimestamp: 1000,
+				Instrument: []models.Instrument{
+					{ID: 1, Symbol: "₽"},
+				},
+				Account: []models.Account{
+					{ID: "account-1", Title: "Cash", Instrument: &instr1},
+				},
+				Transaction: []models.Transaction{
+					{
+						ID:                "tx-payee",
+						Date:              "2024-01-15",
+						Outcome:           100,
+						IncomeAccount:     "account-1",
+						OutcomeAccount:    &acc1,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+						Payee:             "Mdulo 14",
+					},
+					{
+						ID:                "tx-comment",
+						Date:              "2024-01-16",
+						Outcome:           200,
+						IncomeAccount:     "account-1",
+						OutcomeAccount:    &acc1,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+						Comment:           strPtr("To Khrystina S"),
+					},
+				},
+			}, nil
+		},
+	}
+	runtime := newTestRuntime(mc)
+
+	req := mcpReqWithArgs(map[string]any{
+		"query": "khrystina",
+	})
+
+	result, err := handleListTransactions(context.Background(), runtime, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+
+	text := resultText(t, result)
+	var page paginatedTransactions
+	if err := json.Unmarshal([]byte(text), &page); err != nil {
+		t.Fatalf("parse result: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("expected 1 match, got %d", page.Total)
+	}
+	if page.Items[0].ID != "tx-comment" {
+		t.Fatalf("matched ID = %q, want tx-comment", page.Items[0].ID)
+	}
+}
+
+func TestHandleListTransactions_QueryAndPayeeAreCombined(t *testing.T) {
+	instr1 := int32(1)
+	acc1 := "account-1"
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{
+				ServerTimestamp: 1000,
+				Instrument: []models.Instrument{
+					{ID: 1, Symbol: "₽"},
+				},
+				Account: []models.Account{
+					{ID: "account-1", Title: "Cash", Instrument: &instr1},
+				},
+				Transaction: []models.Transaction{
+					{
+						ID:                "tx-1",
+						Date:              "2024-01-15",
+						Outcome:           100,
+						IncomeAccount:     "account-1",
+						OutcomeAccount:    &acc1,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+						Payee:             "Alice",
+						Comment:           strPtr("Birthday gift"),
+					},
+					{
+						ID:                "tx-2",
+						Date:              "2024-01-16",
+						Outcome:           100,
+						IncomeAccount:     "account-1",
+						OutcomeAccount:    &acc1,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+						Payee:             "Bob",
+						Comment:           strPtr("Birthday gift"),
+					},
+				},
+			}, nil
+		},
+	}
+	runtime := newTestRuntime(mc)
+
+	req := mcpReqWithArgs(map[string]any{
+		"query": "gift",
+		"payee": "alice",
+	})
+
+	result, err := handleListTransactions(context.Background(), runtime, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+
+	text := resultText(t, result)
+	var page paginatedTransactions
+	if err := json.Unmarshal([]byte(text), &page); err != nil {
+		t.Fatalf("parse result: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("expected 1 combined-filter match, got %d", page.Total)
+	}
+	if page.Items[0].ID != "tx-1" {
+		t.Fatalf("matched ID = %q, want tx-1", page.Items[0].ID)
+	}
+}
+
+func TestHandleUpdateTransaction_UpdatesInstrumentsWhenAccountChanges(t *testing.T) {
+	instr1 := int32(1)
+	instr2 := int32(2)
+	acc1 := "account-1"
+	var pushedTx models.Transaction
+
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{
+				ServerTimestamp: 1000,
+				User:            []models.User{{ID: 42}},
+				Instrument: []models.Instrument{
+					{ID: 1, Symbol: "₽"},
+					{ID: 2, Symbol: "$"},
+				},
+				Account: []models.Account{
+					{ID: "account-1", Title: "Cash", Instrument: &instr1},
+					{ID: "account-2", Title: "Card", Instrument: &instr2},
+				},
+				Transaction: []models.Transaction{
+					{
+						ID:                "tx-1",
+						User:              42,
+						Date:              "2024-01-15",
+						IncomeAccount:     "account-1",
+						OutcomeAccount:    &acc1,
+						IncomeInstrument:  1,
+						OutcomeInstrument: 1,
+						Outcome:           500,
+					},
+				},
+			}, nil
+		},
+		pushFn: func(ctx context.Context, req models.Request) (models.Response, error) {
+			pushedTx = req.Transaction[0]
+			return models.Response{ServerTimestamp: 2000}, nil
+		},
+	}
+	runtime := newTestRuntime(mc)
+
+	req := mcpReqWithArgs(map[string]any{
+		"id":         "tx-1",
+		"account_id": "account-2",
+	})
+
+	result, err := handleUpdateTransaction(context.Background(), runtime, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+	if pushedTx.IncomeAccount != "account-2" {
+		t.Fatalf("IncomeAccount = %q, want account-2", pushedTx.IncomeAccount)
+	}
+	if pushedTx.OutcomeAccount == nil || *pushedTx.OutcomeAccount != "account-2" {
+		t.Fatalf("OutcomeAccount = %v, want account-2", pushedTx.OutcomeAccount)
+	}
+	if pushedTx.IncomeInstrument != 2 || pushedTx.OutcomeInstrument != 2 {
+		t.Fatalf("instruments = %d/%d, want 2/2", pushedTx.IncomeInstrument, pushedTx.OutcomeInstrument)
+	}
+}

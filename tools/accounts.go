@@ -40,7 +40,7 @@ func toAccountResult(acc models.Account, maps LookupMaps) accountResult {
 func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("list_accounts",
-			mcp.WithDescription("List financial accounts. Set active_only=true to exclude archived accounts."),
+			mcp.WithDescription("Fetch and list current financial accounts from ZenMoney. Set active_only=true to exclude archived accounts."),
 			mcp.WithBoolean("active_only",
 				mcp.Description("If true, exclude archived accounts (default: false)"),
 			),
@@ -53,7 +53,7 @@ func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("find_account",
-			mcp.WithDescription("Find an account by title (case-insensitive). Returns the first match."),
+			mcp.WithDescription("Fetch current accounts from ZenMoney and return the first title match (case-insensitive)."),
 			mcp.WithString("title",
 				mcp.Required(),
 				mcp.Description("Account title to search for"),
@@ -67,12 +67,7 @@ func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 }
 
 func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, activeOnly bool) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -93,12 +88,7 @@ func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, activeOnl
 }
 
 func handleFindAccount(ctx context.Context, runtime *RuntimeProvider, title string) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}

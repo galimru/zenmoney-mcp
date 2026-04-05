@@ -13,7 +13,7 @@ import (
 func RegisterReadTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("list_merchants",
-			mcp.WithDescription("List all merchants (payees/counterparties)."),
+			mcp.WithDescription("Fetch and list current merchants (payees/counterparties) from ZenMoney."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleListMerchants(ctx, runtime)
@@ -22,7 +22,7 @@ func RegisterReadTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("list_budgets",
-			mcp.WithDescription("List monthly budgets. Optionally filter by month (format: YYYY-MM)."),
+			mcp.WithDescription("Fetch current monthly budgets from ZenMoney. Optionally filter by month (format: YYYY-MM)."),
 			mcp.WithString("month",
 				mcp.Description("Filter by month (YYYY-MM), e.g. 2024-03"),
 			),
@@ -35,7 +35,7 @@ func RegisterReadTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("list_reminders",
-			mcp.WithDescription("List all recurring transaction reminders."),
+			mcp.WithDescription("Fetch and list current recurring transaction reminders from ZenMoney."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleListReminders(ctx, runtime)
@@ -44,7 +44,7 @@ func RegisterReadTools(s *server.MCPServer, runtime *RuntimeProvider) {
 
 	s.AddTool(
 		mcp.NewTool("list_instruments",
-			mcp.WithDescription("List all currency instruments with their exchange rates."),
+			mcp.WithDescription("Fetch and list current currency instruments with their exchange rates from ZenMoney."),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleListInstruments(ctx, runtime)
@@ -108,12 +108,7 @@ func toReminderResult(r models.Reminder, maps LookupMaps) reminderResult {
 }
 
 func handleListMerchants(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, _, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, _, err := runtime.scopedSync(ctx, scopeMerchants)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -131,12 +126,7 @@ func handleListMerchants(ctx context.Context, runtime *RuntimeProvider) (*mcp.Ca
 }
 
 func handleListBudgets(ctx context.Context, runtime *RuntimeProvider, month string) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeBudgets)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -173,12 +163,7 @@ func handleListBudgets(ctx context.Context, runtime *RuntimeProvider, month stri
 }
 
 func handleListReminders(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, maps, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, maps, err := runtime.scopedSync(ctx, scopeReminders)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
@@ -196,12 +181,7 @@ func handleListReminders(ctx context.Context, runtime *RuntimeProvider) (*mcp.Ca
 }
 
 func handleListInstruments(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
-	c, err := runtime.apiClient()
-	if err != nil {
-		return runtimeError(err), nil
-	}
-
-	resp, _, err := fetchSyncResponse(ctx, c, runtime.zenStore)
+	resp, _, err := runtime.scopedSync(ctx, scopeInstruments)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
