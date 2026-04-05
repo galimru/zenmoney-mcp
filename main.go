@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mark3labs/mcp-go/server"
 	"github.com/galimru/zenmoney-mcp/tools"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // Populated by -ldflags during build; see Makefile.
@@ -19,13 +19,9 @@ func main() {
 	)
 
 	runtime := tools.NewRuntimeProvider()
-	tools.RegisterSyncTools(s, runtime)
 	tools.RegisterAccountTools(s, runtime)
 	tools.RegisterTransactionTools(s, runtime)
-	tools.RegisterTagTools(s, runtime)
-	tools.RegisterReadTools(s, runtime)
-	tools.RegisterSearchTools(s, runtime)
-	tools.RegisterBulkTools(s, runtime)
+	tools.RegisterCategoryTools(s, runtime)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)

@@ -26,10 +26,9 @@ type RuntimeProvider struct {
 	// zenStore is always constructed at startup and is never nil.
 	zenStore *store.Store
 
-	// preparations holds in-memory bulk operation sets keyed by UUID.
-	preparations struct {
+	importPlans struct {
 		mu   sync.Mutex
-		data map[string]*PreparedBulk
+		data map[string]*PreparedImportPlan
 	}
 }
 
@@ -42,7 +41,7 @@ func NewRuntimeProvider() *RuntimeProvider {
 		},
 		zenStore: store.New(store.DefaultPath()),
 	}
-	p.preparations.data = make(map[string]*PreparedBulk)
+	p.importPlans.data = make(map[string]*PreparedImportPlan)
 	return p
 }
 
@@ -171,22 +170,25 @@ func (p *RuntimeProvider) saveServerTimestamp(serverTimestamp int) {
 	s.SaveServerTimestamp(serverTimestamp)
 }
 
-// storePreparation stores a prepared bulk operation under the given ID.
-func (p *RuntimeProvider) storePreparation(id string, bulk *PreparedBulk) {
-	p.preparations.mu.Lock()
-	defer p.preparations.mu.Unlock()
-	p.preparations.data[id] = bulk
+func (p *RuntimeProvider) storeImportPlan(id string, plan *PreparedImportPlan) {
+	p.importPlans.mu.Lock()
+	defer p.importPlans.mu.Unlock()
+	if p.importPlans.data == nil {
+		p.importPlans.data = make(map[string]*PreparedImportPlan)
+	}
+	p.importPlans.data[id] = plan
 }
 
-// takePreparation retrieves and removes a prepared bulk operation.
-// Returns nil if not found.
-func (p *RuntimeProvider) takePreparation(id string) *PreparedBulk {
-	p.preparations.mu.Lock()
-	defer p.preparations.mu.Unlock()
-	bulk, ok := p.preparations.data[id]
+func (p *RuntimeProvider) takeImportPlan(id string) *PreparedImportPlan {
+	p.importPlans.mu.Lock()
+	defer p.importPlans.mu.Unlock()
+	if p.importPlans.data == nil {
+		return nil
+	}
+	plan, ok := p.importPlans.data[id]
 	if !ok {
 		return nil
 	}
-	delete(p.preparations.data, id)
-	return bulk
+	delete(p.importPlans.data, id)
+	return plan
 }

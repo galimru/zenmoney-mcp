@@ -21,7 +21,6 @@ func TestRuntimeProvider_ConfigCachedAfterSuccess(t *testing.T) {
 		},
 		zenStore: store.New("/tmp/test-rp-sync.json"),
 	}
-	p.preparations.data = make(map[string]*PreparedBulk)
 
 	// Two calls should only invoke loadConfig once.
 	_, err := p.config()
@@ -52,7 +51,6 @@ func TestRuntimeProvider_ConfigRetriedAfterFailure(t *testing.T) {
 		},
 		zenStore: store.New("/tmp/test-rp-sync2.json"),
 	}
-	p.preparations.data = make(map[string]*PreparedBulk)
 
 	// Fail twice, then succeed.
 	_, err := p.config()
@@ -84,7 +82,6 @@ func TestRuntimeProvider_ApiClientCachedAfterSuccess(t *testing.T) {
 		},
 		zenStore: store.New("/tmp/test-rp-sync3.json"),
 	}
-	p.preparations.data = make(map[string]*PreparedBulk)
 
 	_, _ = p.apiClient()
 	_, _ = p.apiClient()

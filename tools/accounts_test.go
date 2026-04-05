@@ -8,7 +8,7 @@ import (
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
 
-func TestHandleListAccounts_FilterActiveOnly(t *testing.T) {
+func TestHandleListAccounts_HidesArchivedByDefault(t *testing.T) {
 	mc := &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			instr := int32(1)
@@ -36,28 +36,31 @@ func TestHandleListAccounts_FilterActiveOnly(t *testing.T) {
 
 	runtime := newTestRuntime(mc)
 
-	// Without filter: both accounts returned.
+	// Default: archived accounts are hidden.
 	result, err := handleListAccounts(context.Background(), runtime, false)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
-
-	// With filter: only active account.
-	result, err = handleListAccounts(context.Background(), runtime, true)
-	if err != nil || result.IsError {
-		t.Fatalf("unexpected error with active_only: %v / %v", err, result)
-	}
-	// The result JSON should only contain "Active", not "Archived".
 	text := resultText(t, result)
 	if contains(text, "Archived") {
-		t.Error("archived account should not appear when active_only=true")
+		t.Error("archived account should not appear by default")
 	}
 	if !contains(text, "Active") {
-		t.Error("active account should appear when active_only=true")
+		t.Error("active account should appear by default")
+	}
+
+	// When requested: archived accounts are included.
+	result, err = handleListAccounts(context.Background(), runtime, true)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error with show_archived: %v / %v", err, result)
+	}
+	text = resultText(t, result)
+	if !contains(text, "Archived") {
+		t.Error("archived account should appear when show_archived=true")
 	}
 }
 
-func TestHandleFindAccount_CaseInsensitive(t *testing.T) {
+func TestHandleFindAccounts_CaseInsensitive(t *testing.T) {
 	mc := &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			return models.Response{
@@ -70,7 +73,7 @@ func TestHandleFindAccount_CaseInsensitive(t *testing.T) {
 	}
 	runtime := newTestRuntime(mc)
 
-	result, err := handleFindAccount(context.Background(), runtime, "my cash")
+	result, err := handleFindAccounts(context.Background(), runtime, "my cash", 20)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
@@ -80,7 +83,7 @@ func TestHandleFindAccount_CaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestHandleFindAccount_NotFound(t *testing.T) {
+func TestHandleFindAccounts_NotFound(t *testing.T) {
 	mc := &mockZenClient{
 		fullSyncFn: func(ctx context.Context) (models.Response, error) {
 			return models.Response{ServerTimestamp: 1000}, nil
@@ -88,13 +91,43 @@ func TestHandleFindAccount_NotFound(t *testing.T) {
 	}
 	runtime := newTestRuntime(mc)
 
-	result, err := handleFindAccount(context.Background(), runtime, "nonexistent")
+	result, err := handleFindAccounts(context.Background(), runtime, "nonexistent", 20)
 	if err != nil || result.IsError {
 		t.Fatalf("unexpected error: %v / %v", err, result)
 	}
 	text := resultText(t, result)
-	if !contains(text, "not found") && !contains(text, "No account") {
-		t.Errorf("expected not-found message, got: %s", text)
+	if text != "[]" && !contains(text, "[]") {
+		t.Errorf("expected empty result array, got: %s", text)
+	}
+}
+
+func TestHandleFindAccounts_ExactMatchesBeforePartialMatches(t *testing.T) {
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return models.Response{
+				ServerTimestamp: 1000,
+				Account: []models.Account{
+					{ID: "a1", Title: "Cash"},
+					{ID: "a2", Title: "Main Cash"},
+					{ID: "a3", Title: "Cash Reserve"},
+				},
+			}, nil
+		},
+	}
+	runtime := newTestRuntime(mc)
+
+	result, err := handleFindAccounts(context.Background(), runtime, "cash", 20)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+	text := resultText(t, result)
+	firstCash := strings.Index(text, "\"title\": \"Cash\"")
+	mainCash := strings.Index(text, "\"title\": \"Main Cash\"")
+	if firstCash == -1 || mainCash == -1 {
+		t.Fatalf("expected both Cash and Main Cash in result, got: %s", text)
+	}
+	if firstCash > mainCash {
+		t.Fatalf("expected exact match to appear before partial match, got: %s", text)
 	}
 }
 

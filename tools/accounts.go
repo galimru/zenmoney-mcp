@@ -36,37 +36,41 @@ func toAccountResult(acc models.Account, maps LookupMaps) accountResult {
 	}
 }
 
-// RegisterAccountTools adds list_accounts and find_account to the MCP server.
+// RegisterAccountTools adds list_accounts and find_accounts to the MCP server.
 func RegisterAccountTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
 		mcp.NewTool("list_accounts",
-			mcp.WithDescription("Fetch and list current financial accounts from ZenMoney. Set active_only=true to exclude archived accounts."),
-			mcp.WithBoolean("active_only",
-				mcp.Description("If true, exclude archived accounts (default: false)"),
+			mcp.WithDescription("Fetch and list current financial accounts from ZenMoney. Archived accounts are hidden by default."),
+			mcp.WithBoolean("show_archived",
+				mcp.Description("If true, include archived accounts (default: false)"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			activeOnly := req.GetBool("active_only", false)
-			return handleListAccounts(ctx, runtime, activeOnly)
+			showArchived := req.GetBool("show_archived", false)
+			return handleListAccounts(ctx, runtime, showArchived)
 		},
 	)
 
 	s.AddTool(
-		mcp.NewTool("find_account",
-			mcp.WithDescription("Fetch current accounts from ZenMoney and return the first title match (case-insensitive)."),
-			mcp.WithString("title",
+		mcp.NewTool("find_accounts",
+			mcp.WithDescription("Find accounts by title. Exact title matches are returned first, followed by substring matches."),
+			mcp.WithString("query",
 				mcp.Required(),
-				mcp.Description("Account title to search for"),
+				mcp.Description("Case-insensitive title query"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Maximum number of matches to return (default: 20, max: 100)"),
 			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			title := req.GetString("title", "")
-			return handleFindAccount(ctx, runtime, title)
+			query := req.GetString("query", "")
+			limit := int(req.GetFloat("limit", 20))
+			return handleFindAccounts(ctx, runtime, query, limit)
 		},
 	)
 }
 
-func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, activeOnly bool) (*mcp.CallToolResult, error) {
+func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, showArchived bool) (*mcp.CallToolResult, error) {
 	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
@@ -74,7 +78,7 @@ func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, activeOnl
 
 	results := make([]accountResult, 0, len(resp.Account))
 	for _, acc := range resp.Account {
-		if activeOnly && acc.Archive {
+		if !showArchived && acc.Archive {
 			continue
 		}
 		results = append(results, toAccountResult(acc, maps))
@@ -87,20 +91,40 @@ func handleListAccounts(ctx context.Context, runtime *RuntimeProvider, activeOnl
 	return out, nil
 }
 
-func handleFindAccount(ctx context.Context, runtime *RuntimeProvider, title string) (*mcp.CallToolResult, error) {
+func handleFindAccounts(ctx context.Context, runtime *RuntimeProvider, query string, limit int) (*mcp.CallToolResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
 	resp, maps, err := runtime.scopedSync(ctx, scopeAccounts)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
 
+	queryLower := strings.ToLower(query)
+	exact := make([]accountResult, 0, limit)
+	partial := make([]accountResult, 0, limit)
 	for _, acc := range resp.Account {
-		if strings.EqualFold(acc.Title, title) {
-			out, err := structJSON(toAccountResult(acc, maps))
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return out, nil
+		titleLower := strings.ToLower(acc.Title)
+		result := toAccountResult(acc, maps)
+		switch {
+		case strings.EqualFold(acc.Title, query):
+			exact = append(exact, result)
+		case strings.Contains(titleLower, queryLower):
+			partial = append(partial, result)
 		}
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("No account found with title %q", title)), nil
+
+	results := append(exact, partial...)
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return structJSON(results)
 }

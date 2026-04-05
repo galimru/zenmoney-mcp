@@ -18,3 +18,10 @@ func resultText(t *testing.T, result *mcp.CallToolResult) string {
 	}
 	return tc.Text
 }
+
+// mcpReqWithArgs builds a minimal CallToolRequest with the given arguments.
+func mcpReqWithArgs(args map[string]any) mcp.CallToolRequest {
+	var req mcp.CallToolRequest
+	req.Params.Arguments = args
+	return req
+}

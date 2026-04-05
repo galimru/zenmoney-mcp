@@ -74,6 +74,6 @@ func newTestRuntime(mc *mockZenClient) *RuntimeProvider {
 		},
 		zenStore: store.New(dir + "/sync_state.json"),
 	}
-	p.preparations.data = make(map[string]*PreparedBulk)
+	p.importPlans.data = make(map[string]*PreparedImportPlan)
 	return p
 }

@@ -12,13 +12,13 @@ import (
 	"github.com/nemirlev/zenmoney-go-sdk/v2/models"
 )
 
-type tagResult struct {
+type categoryResult struct {
 	ID     string  `json:"id"`
 	Title  string  `json:"title"`
-	Parent *string `json:"parent,omitempty"` // resolved parent tag title
+	Parent *string `json:"parent,omitempty"`
 }
 
-func toTagResult(tag models.Tag, maps LookupMaps) tagResult {
+func toCategoryResult(tag models.Tag, maps LookupMaps) categoryResult {
 	var parent *string
 	if tag.Parent != nil && *tag.Parent != "" {
 		name := maps.Tags[*tag.Parent]
@@ -27,47 +27,41 @@ func toTagResult(tag models.Tag, maps LookupMaps) tagResult {
 		}
 		parent = &name
 	}
-	return tagResult{
+	return categoryResult{
 		ID:     tag.ID,
 		Title:  tag.Title,
 		Parent: parent,
 	}
 }
 
-// RegisterTagTools adds list_tags, find_tag, and create_tag to the MCP server.
-func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
+// RegisterCategoryTools adds find_categories and add_category to the MCP server.
+func RegisterCategoryTools(s *server.MCPServer, runtime *RuntimeProvider) {
 	s.AddTool(
-		mcp.NewTool("list_tags",
-			mcp.WithDescription("Fetch and list current transaction category tags from ZenMoney."),
+		mcp.NewTool("find_categories",
+			mcp.WithDescription("Find categories by title. If query is omitted, return categories up to the limit."),
+			mcp.WithString("query",
+				mcp.Description("Optional case-insensitive substring to search for in category titles"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Maximum number of matches to return (default: 20, max: 100)"),
+			),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return handleListTags(ctx, runtime)
+			query := req.GetString("query", "")
+			limit := int(req.GetFloat("limit", 20))
+			return handleFindCategories(ctx, runtime, query, limit)
 		},
 	)
 
 	s.AddTool(
-		mcp.NewTool("find_tag",
-			mcp.WithDescription("Fetch current category tags from ZenMoney and return the first title match (case-insensitive)."),
+		mcp.NewTool("add_category",
+			mcp.WithDescription("Create a transaction category if needed. If a category with the same title already exists, return the existing category."),
 			mcp.WithString("title",
 				mcp.Required(),
-				mcp.Description("Tag title to search for"),
+				mcp.Description("Category title"),
 			),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			title := req.GetString("title", "")
-			return handleFindTag(ctx, runtime, title)
-		},
-	)
-
-	s.AddTool(
-		mcp.NewTool("create_tag",
-			mcp.WithDescription("Fetch current tags from ZenMoney, then create a new category tag if needed. Idempotent: returns the existing tag if one with the same title already exists (case-insensitive)."),
-			mcp.WithString("title",
-				mcp.Required(),
-				mcp.Description("Tag title"),
-			),
-			mcp.WithString("parent_tag_id",
-				mcp.Description("Parent tag ID (for nested categories, max one level deep)"),
+			mcp.WithString("parent_category",
+				mcp.Description("Parent category title or ID (for nested categories, max one level deep)"),
 			),
 			mcp.WithString("icon", mcp.Description("Icon ID")),
 			mcp.WithNumber("color", mcp.Description("Icon color as ARGB integer")),
@@ -78,20 +72,35 @@ func RegisterTagTools(s *server.MCPServer, runtime *RuntimeProvider) {
 			mcp.WithBoolean("required", mcp.Description("Mark expenses as required/mandatory")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			return handleCreateTag(ctx, runtime, req)
+			return handleAddCategory(ctx, runtime, req)
 		},
 	)
 }
 
-func handleListTags(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToolResult, error) {
+func handleFindCategories(ctx context.Context, runtime *RuntimeProvider, query string, limit int) (*mcp.CallToolResult, error) {
+	query = strings.TrimSpace(query)
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
 	resp, maps, err := runtime.scopedSync(ctx, scopeTags)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
 
-	results := make([]tagResult, len(resp.Tag))
-	for i, tag := range resp.Tag {
-		results[i] = toTagResult(tag, maps)
+	query = strings.ToLower(query)
+	results := make([]categoryResult, 0, limit)
+	for _, tag := range resp.Tag {
+		if query != "" && !strings.Contains(strings.ToLower(tag.Title), query) {
+			continue
+		}
+		results = append(results, toCategoryResult(tag, maps))
+		if len(results) >= limit {
+			break
+		}
 	}
 
 	out, err := structJSON(results)
@@ -101,25 +110,7 @@ func handleListTags(ctx context.Context, runtime *RuntimeProvider) (*mcp.CallToo
 	return out, nil
 }
 
-func handleFindTag(ctx context.Context, runtime *RuntimeProvider, title string) (*mcp.CallToolResult, error) {
-	resp, maps, err := runtime.scopedSync(ctx, scopeTags)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
-	}
-
-	for _, tag := range resp.Tag {
-		if strings.EqualFold(tag.Title, title) {
-			out, err := structJSON(toTagResult(tag, maps))
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return out, nil
-		}
-	}
-	return mcp.NewToolResultText(fmt.Sprintf("No tag found with title %q", title)), nil
-}
-
-func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAddCategory(ctx context.Context, runtime *RuntimeProvider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	title := strings.TrimSpace(req.GetString("title", ""))
 	if title == "" {
 		return mcp.NewToolResultError("title is required and must not be empty"), nil
@@ -135,10 +126,9 @@ func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.Call
 		return mcp.NewToolResultError(fmt.Sprintf("sync failed: %v", err)), nil
 	}
 
-	// Idempotent: return existing tag if title matches.
 	for _, tag := range resp.Tag {
 		if strings.EqualFold(tag.Title, title) {
-			out, err := structJSON(toTagResult(tag, maps))
+			out, err := structJSON(toCategoryResult(tag, maps))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -151,12 +141,13 @@ func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.Call
 		userID = resp.User[0].ID
 	}
 
-	// Validate parent tag if provided.
-	parentID := req.GetString("parent_tag_id", "")
+	parentID := req.GetString("parent_category", "")
 	if parentID != "" {
-		if _, ok := maps.Tags[parentID]; !ok {
-			return mcp.NewToolResultError(fmt.Sprintf("parent tag %q not found", parentID)), nil
+		resolvedParentID, err := resolveCategoryRef(parentID, &transactionEnv{maps: maps})
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
+		parentID = resolvedParentID
 	}
 
 	var parentPtr *string
@@ -195,17 +186,16 @@ func handleCreateTag(ctx context.Context, runtime *RuntimeProvider, req mcp.Call
 
 	pushResp, err := c.Push(ctx, pushTagRequest(runtime.currentServerTimestamp(), []models.Tag{newTag}))
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("create tag: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("create category: %v", err)), nil
 	}
 
 	if pushResp.ServerTimestamp > 0 {
 		runtime.saveServerTimestamp(pushResp.ServerTimestamp)
 	}
 
-	// Add new tag to maps for parent resolution in response.
 	maps.Tags[newTag.ID] = newTag.Title
 
-	out, err := structJSON(toTagResult(newTag, maps))
+	out, err := structJSON(toCategoryResult(newTag, maps))
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

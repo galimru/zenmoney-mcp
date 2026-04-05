@@ -15,7 +15,7 @@
 
 ---
 
-Connect your AI assistant to ZenMoney. List and search transactions, create and update records, manage category tags, browse budgets and merchants, and run bulk imports — all through natural conversation.
+Connect your AI assistant to ZenMoney. Search transactions, add and edit records, auto-categorize uncategorized activity, preview normalized imports, and commit them safely from the chat.
 
 ## Quick Start
 
@@ -54,67 +54,48 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 ## Tools
 
-### Sync
-
-| Tool | What it does |
-|------|--------------|
-| `sync` | Incremental diff sync — fetches only entities changed since the last sync |
-| `full_sync` | Full sync — resets cached sync state and re-downloads the full dataset; use to resolve inconsistencies or on first run |
-
 ### Accounts
 
 | Tool | What it does |
 |------|--------------|
-| `list_accounts` | Fetch and list current financial accounts from ZenMoney; set `active_only=true` to exclude archived |
-| `find_account` | Fetch current accounts from ZenMoney and return the first title match (case-insensitive) |
+| `list_accounts` | Fetch and list current financial accounts from ZenMoney; archived accounts are hidden unless `show_archived=true` |
+| `find_accounts` | Find accounts by title, with exact matches returned first and substring matches after |
 
 ### Transactions
 
 | Tool | What it does |
 |------|--------------|
-| `list_transactions` | Fetch current transactions from ZenMoney and return filtered results as `{items, total, offset, limit}`; `query` searches across both payee and comment |
-| `create_transaction` | Fetch current account/tag data from ZenMoney, then create a new transaction; supports transfers via `to_account_id` |
-| `update_transaction` | Fetch the current transaction from ZenMoney, apply only the provided changes, and update it by ID |
-| `delete_transaction` | Fetch the current transaction from ZenMoney, delete it by ID, and return the deleted record for confirmation |
+| `find_transactions` | Search transactions by date, account, category, amount, payee, query, or type and return paginated results |
+| `add_transaction` | Create a transaction from type, date, amount, `account_id`, and optional category, payee, comment, currency, or `to_account_id` fields |
+| `edit_transaction` | Update a transaction by ID with optional field changes, using explicit account IDs for account changes and clear flags for payee, comment, or category |
+| `remove_transaction` | Delete a transaction by ID |
 
-### Tags (Categories)
-
-| Tool | What it does |
-|------|--------------|
-| `list_tags` | Fetch and list current category tags from ZenMoney |
-| `find_tag` | Fetch current tags from ZenMoney and return the first title match (case-insensitive) |
-| `create_tag` | Fetch current tags from ZenMoney, then create a category tag if needed; idempotent — returns an existing tag if the title already exists |
-
-### Reference data
+### Categories
 
 | Tool | What it does |
 |------|--------------|
-| `list_merchants` | Fetch and list current merchants (payees / counterparties) from ZenMoney |
-| `list_budgets` | Fetch current monthly budgets from ZenMoney; optionally filter by month (`YYYY-MM`) |
-| `list_reminders` | Fetch and list current recurring transaction reminders from ZenMoney |
-| `list_instruments` | Fetch and list current currency instruments with exchange rates from ZenMoney |
-| `get_instrument` | Fetch current instruments from ZenMoney and return the one matching a numeric ID |
+| `find_categories` | Find categories by title, or return categories up to the limit when no query is provided |
+| `add_category` | Create a category if needed and return the existing one when the same title already exists |
 
 ### Categorisation
 
 | Tool | What it does |
 |------|--------------|
-| `suggest_category` | Suggest a category tag for a transaction based on payee and/or comment, resolving returned tag IDs against current ZenMoney categories |
+| `categorize_transactions` | Preview or apply categories for existing transactions by IDs or search filters, with assisted categorization for unresolved items |
 
-### Bulk operations
+### Import workflow
 
 | Tool | What it does |
 |------|--------------|
-| `prepare_bulk_operations` | Fetch current transaction/account/tag state from ZenMoney, then validate and preview up to 20 create/update/delete operations without committing; returns a `preparation_id` |
-| `execute_bulk_operations` | Commit a previously prepared bulk operation to ZenMoney; returns a summary |
+| `preview_transaction_import` | Validate and preview canonical transaction rows, using explicit account IDs, flag duplicates or invalid rows, and identify items that need review |
+| `commit_transaction_import` | Commit a previously previewed import plan sequentially and return created, skipped, and failed counts |
 
-### Example workflow — import a bank statement
+### Example workflow — import normalized statement rows
 
-1. Run `full_sync` to make sure local data is fresh.
-2. Use `list_accounts` to find the account ID for your bank account.
-3. Use `find_tag` (or `create_tag`) to resolve category names to IDs.
-4. Use `prepare_bulk_operations` to preview the transactions parsed from the statement.
-5. Review the preview, then call `execute_bulk_operations` with the returned `preparation_id`.
+1. Use `find_accounts` to resolve the account ID you want to import into.
+2. Prepare canonical rows with fields such as `date`, `amount`, `type`, `payee`, `comment`, optional `category`, and `account_id`.
+3. Use `preview_transaction_import` to resolve names, detect duplicates, and see which rows need review.
+4. Review the preview, then call `commit_transaction_import` with the returned `import_plan_id`.
 
 ## Configuration
 
@@ -137,8 +118,8 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `transaction_limit` | No | Default page size for `list_transactions`. `0` is treated as the default value `100`. |
-| `max_bulk_operations` | No | Maximum number of operations per `prepare_bulk_operations` call. Must be ≤ 100. Default: `20`. |
+| `transaction_limit` | No | Default page size for `find_transactions`. `0` is treated as the default value `100`. |
+| `max_bulk_operations` | No | Maximum number of rows accepted by `preview_transaction_import`. Must be ≤ 100. Default: `20`. |
 
 ## Notes
 
