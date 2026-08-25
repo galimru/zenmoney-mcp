@@ -138,3 +138,82 @@ type PlannedImportRow struct {
 type PreparedImportPlan struct {
 	Rows []PlannedImportRow
 }
+
+// EditBatchInput describes a batch of edits applied to existing transactions.
+type EditBatchInput struct {
+	Items     []EditInput
+	ChunkSize int
+	// ReturnItems overrides whether the saved rows are echoed back. When nil,
+	// they are echoed only for small batches: a large batch would otherwise
+	// return thousands of lines the caller already knows it sent.
+	ReturnItems *bool
+}
+
+// EditBatchRow reports a row that kept the batch from being applied as a whole.
+type EditBatchRow struct {
+	Index         int    `json:"index"`
+	TransactionID string `json:"transaction_id,omitempty"`
+	Status        string `json:"status"`
+	Reason        string `json:"reason"`
+}
+
+// EditBatchResponse is the outcome of a batch edit.
+type EditBatchResponse struct {
+	Updated bool                `json:"updated"`
+	Message string              `json:"message"`
+	Count   int                 `json:"count,omitempty"`
+	Chunks  int                 `json:"chunks,omitempty"`
+	Rows    []EditBatchRow      `json:"rows,omitempty"`
+	Items   []TransactionResult `json:"items,omitempty"`
+	// ItemsOmitted counts saved rows left out of Items to keep the response small.
+	ItemsOmitted int `json:"items_omitted,omitempty"`
+}
+
+// EditDraft is one row of a batch edit as received from a tool call.
+// Payee and Comment are pointers so an omitted field is distinguishable from
+// an explicitly empty one.
+type EditDraft struct {
+	TransactionID string  `json:"transaction_id"`
+	Type          TxType  `json:"type,omitempty"`
+	Date          string  `json:"date,omitempty"`
+	Amount        float64 `json:"amount,omitempty"`
+	AccountID     string  `json:"account_id,omitempty"`
+	ToAccountID   string  `json:"to_account_id,omitempty"`
+	Category      string  `json:"category,omitempty"`
+	Categories    string  `json:"categories,omitempty"`
+	Payee         *string `json:"payee,omitempty"`
+	Comment       *string `json:"comment,omitempty"`
+	Currency      string  `json:"currency,omitempty"`
+	ClearCategory bool    `json:"clear_category,omitempty"`
+	ClearPayee    bool    `json:"clear_payee,omitempty"`
+	ClearComment  bool    `json:"clear_comment,omitempty"`
+}
+
+// ToEditInput converts a batch row into the input shared with edit_transaction.
+func (d EditDraft) ToEditInput() EditInput {
+	in := EditInput{
+		TransactionID: d.TransactionID,
+		WriteInput: WriteInput{
+			Type:          d.Type,
+			Date:          d.Date,
+			Amount:        d.Amount,
+			AccountID:     d.AccountID,
+			ToAccountID:   d.ToAccountID,
+			Category:      d.Category,
+			Categories:    d.Categories,
+			Currency:      d.Currency,
+			ClearCategory: d.ClearCategory,
+			ClearPayee:    d.ClearPayee,
+			ClearComment:  d.ClearComment,
+		},
+	}
+	if d.Payee != nil {
+		in.Payee = *d.Payee
+		in.PayeeSet = true
+	}
+	if d.Comment != nil {
+		in.Comment = *d.Comment
+		in.CommentSet = true
+	}
+	return in
+}

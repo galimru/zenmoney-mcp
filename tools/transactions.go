@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/galimru/zenmoney-mcp/internal/runtime"
@@ -88,6 +89,42 @@ func RegisterTransactionTools(s *server.MCPServer, p *runtime.Provider) {
 	)
 
 	s.AddTool(
+		mcp.NewTool("edit_transactions",
+			mcp.WithDescription("Edit many existing transactions in one call. Use this instead of repeating edit_transaction: the whole batch shares a single sync and is written in as few requests as possible. Each row needs transaction_id plus the fields to change, using the same field names as edit_transaction. The batch is validated first — if any row is unusable nothing is saved and the response lists the row indexes and reasons."),
+			mcp.WithArray("items",
+				mcp.Required(),
+				mcp.Description("Rows to edit. Each row must include transaction_id plus at least one field to change."),
+				mcp.Items(map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"transaction_id": map[string]any{"type": "string", "description": "ID of the transaction to update."},
+						"type":           map[string]any{"type": "string", "enum": []string{"expense", "income", "transfer"}},
+						"date":           map[string]any{"type": "string", "description": "New date in YYYY-MM-DD format."},
+						"amount":         map[string]any{"type": "number", "description": "New amount."},
+						"account_id":     map[string]any{"type": "string", "description": "New primary account ID."},
+						"to_account_id":  map[string]any{"type": "string", "description": "New destination account ID for transfers."},
+						"category":       map[string]any{"type": "string", "description": "Category title or ID."},
+						"categories":     map[string]any{"type": "string", "description": "Categories as JSON array string or comma-separated string."},
+						"payee":          map[string]any{"type": "string"},
+						"comment":        map[string]any{"type": "string"},
+						"currency":       map[string]any{"type": "string", "description": "Currency symbol, code, title, or instrument ID."},
+						"clear_category": map[string]any{"type": "boolean", "description": "If true, remove all categories."},
+						"clear_payee":    map[string]any{"type": "boolean", "description": "If true, clear payee."},
+						"clear_comment":  map[string]any{"type": "boolean", "description": "If true, clear comment."},
+					},
+					"required":             []string{"transaction_id"},
+					"additionalProperties": false,
+				}),
+			),
+			mcp.WithNumber("chunk_size", mcp.Description("Rows per write request (default 100, maximum 200). Lower it if large batches time out.")),
+			mcp.WithBoolean("return_items", mcp.Description("Echo the saved rows back. Defaults to true for batches of 20 rows or fewer and false above that, where the echo is large and adds nothing the caller did not send; count and items_omitted always report what was saved.")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return handleEditTransactions(ctx, p, req)
+		},
+	)
+
+	s.AddTool(
 		mcp.NewTool("remove_transaction",
 			mcp.WithDescription("Delete a transaction by ID."),
 			mcp.WithString("transaction_id", mcp.Required(), mcp.Description("Transaction ID to delete")),
@@ -162,6 +199,47 @@ func handleEditTransaction(ctx context.Context, p *runtime.Provider, req mcp.Cal
 		return mcp.NewToolResultText(fmt.Sprintf("No transaction found with ID %q", req.GetString("transaction_id", ""))), nil
 	}
 	return structJSON(out)
+}
+
+func handleEditTransactions(ctx context.Context, p *runtime.Provider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	items, err := decodeEditRows(req.GetArguments()["items"])
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	out, err := transactions.NewService(p).EditBatch(ctx, transactions.EditBatchInput{
+		Items:       items,
+		ChunkSize:   int(req.GetFloat("chunk_size", 0)),
+		ReturnItems: optionalBool(req, "return_items"),
+	})
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return structJSON(out)
+}
+
+func decodeEditRows(raw any) ([]transactions.EditInput, error) {
+	if raw == nil {
+		return nil, fmt.Errorf("items is required")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid items: %v", err)
+	}
+
+	var drafts []transactions.EditDraft
+	if err := json.Unmarshal(data, &drafts); err != nil {
+		return nil, fmt.Errorf("invalid items: %v", err)
+	}
+	if len(drafts) == 0 {
+		return nil, fmt.Errorf("items is required")
+	}
+
+	out := make([]transactions.EditInput, 0, len(drafts))
+	for _, draft := range drafts {
+		out = append(out, draft.ToEditInput())
+	}
+	return out, nil
 }
 
 func handleSuggestTransactionCategories(ctx context.Context, p *runtime.Provider, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

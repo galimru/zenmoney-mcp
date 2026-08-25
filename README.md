@@ -69,6 +69,7 @@ The config file `~/.config/zenmoney-mcp/config.json` is created on first run wit
 | `list_uncategorized_transactions` | List transactions without categories |
 | `add_transaction` | Create a transaction from type, date, amount, `account_id`, and optional category, payee, comment, currency, or `to_account_id` fields |
 | `edit_transaction` | Update a transaction by ID with optional field changes, using explicit account IDs for account changes and clear flags for payee, comment, or category |
+| `edit_transactions` | Update many transactions in one call, sharing a single sync and writing in as few requests as possible; the batch is validated first and reports problem rows instead of writing a partial result. Batches over 20 rows report `count` and `items_omitted` instead of echoing every saved row; `return_items` forces either behaviour |
 | `remove_transaction` | Delete a transaction by ID |
 
 ### Categories
