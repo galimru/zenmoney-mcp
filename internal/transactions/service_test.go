@@ -17,6 +17,7 @@ type mockRuntime struct {
 	client     client.ZenClient
 	resp       models.Response
 	serverTime int
+	syncCalls  int
 }
 
 func (m *mockRuntime) Config() (*config.Config, error) {
@@ -28,6 +29,7 @@ func (m *mockRuntime) Client() (client.ZenClient, error) {
 }
 
 func (m *mockRuntime) ScopedSync(context.Context, []models.EntityType) (models.Response, runtime.LookupMaps, error) {
+	m.syncCalls++
 	return m.resp, runtime.BuildLookupMaps(m.resp), nil
 }
 
