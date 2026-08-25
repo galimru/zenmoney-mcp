@@ -97,3 +97,34 @@ func TestHandleEditTransactions_RequiresItems(t *testing.T) {
 		t.Fatal("expected an error result when items is missing")
 	}
 }
+
+func TestHandleEditTransactions_ReturnItemsFalseKeepsResponseSmall(t *testing.T) {
+	mc := &mockZenClient{
+		fullSyncFn: func(ctx context.Context) (models.Response, error) {
+			return workflowSyncResponse(), nil
+		},
+		pushFn: func(ctx context.Context, req models.Request) (models.Response, error) {
+			return models.Response{ServerTimestamp: 2000}, nil
+		},
+	}
+	p := newTestRuntime(mc)
+
+	req := mcpReqWithArgs(map[string]any{
+		"return_items": false,
+		"items": []any{
+			map[string]any{"transaction_id": "tx-uncategorized", "category": "Food"},
+		},
+	})
+
+	result, err := handleEditTransactions(context.Background(), p, req)
+	if err != nil || result.IsError {
+		t.Fatalf("unexpected error: %v / %v", err, result)
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, `"items_omitted": 1`) {
+		t.Fatalf("result = %s, want items_omitted = 1", text)
+	}
+	if strings.Contains(text, `"income_account"`) {
+		t.Fatalf("result echoed row details despite return_items=false: %s", text)
+	}
+}

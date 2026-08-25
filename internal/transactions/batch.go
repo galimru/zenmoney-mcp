@@ -14,6 +14,9 @@ const (
 	defaultEditBatchChunkSize = 100
 	maxEditBatchChunkSize     = 200
 	maxEditBatchItems         = 1000
+	// editBatchItemsEchoLimit is the largest batch echoed back in full when the
+	// caller does not ask either way.
+	editBatchItemsEchoLimit = 20
 )
 
 type plannedEdit struct {
@@ -95,13 +98,29 @@ func (s *Service) EditBatch(ctx context.Context, in EditBatchInput) (EditBatchRe
 		}
 	}
 
+	items, omitted := echoItems(applied, in.ReturnItems)
+
 	return EditBatchResponse{
-		Updated: true,
-		Message: fmt.Sprintf("Updated %d transaction(s) in %d push(es).", len(applied), chunks),
-		Count:   len(applied),
-		Chunks:  chunks,
-		Items:   applied,
+		Updated:      true,
+		Message:      fmt.Sprintf("Updated %d transaction(s) in %d push(es).", len(applied), chunks),
+		Count:        len(applied),
+		Chunks:       chunks,
+		Items:        items,
+		ItemsOmitted: omitted,
 	}, nil
+}
+
+// echoItems decides how much of a successful batch is returned. Callers can force
+// the choice with return_items; otherwise only small batches come back in full.
+func echoItems(applied []TransactionResult, returnItems *bool) ([]TransactionResult, int) {
+	echo := len(applied) <= editBatchItemsEchoLimit
+	if returnItems != nil {
+		echo = *returnItems
+	}
+	if echo {
+		return applied, 0
+	}
+	return nil, len(applied)
 }
 
 func (s *Service) planEditBatch(ctx context.Context, c client.ZenClient, env *transactionEnv, items []EditInput) ([]plannedEdit, []EditBatchRow) {

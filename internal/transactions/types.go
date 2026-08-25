@@ -143,6 +143,10 @@ type PreparedImportPlan struct {
 type EditBatchInput struct {
 	Items     []EditInput
 	ChunkSize int
+	// ReturnItems overrides whether the saved rows are echoed back. When nil,
+	// they are echoed only for small batches: a large batch would otherwise
+	// return thousands of lines the caller already knows it sent.
+	ReturnItems *bool
 }
 
 // EditBatchRow reports a row that kept the batch from being applied as a whole.
@@ -161,6 +165,8 @@ type EditBatchResponse struct {
 	Chunks  int                 `json:"chunks,omitempty"`
 	Rows    []EditBatchRow      `json:"rows,omitempty"`
 	Items   []TransactionResult `json:"items,omitempty"`
+	// ItemsOmitted counts saved rows left out of Items to keep the response small.
+	ItemsOmitted int `json:"items_omitted,omitempty"`
 }
 
 // EditDraft is one row of a batch edit as received from a tool call.

@@ -206,3 +206,43 @@ func TestServiceEditBatch_RejectsEmptyBatch(t *testing.T) {
 		t.Fatal("EditBatch() error = nil, want an error for an empty batch")
 	}
 }
+
+func TestServiceEditBatch_ReturnItemsFalseOmitsEcho(t *testing.T) {
+	rt := batchRuntime(echoPush)
+	svc := NewService(rt)
+	no := false
+
+	out, err := svc.EditBatch(context.Background(), EditBatchInput{
+		ReturnItems: &no,
+		Items: []EditInput{
+			{TransactionID: "tx-uncategorized-expense", WriteInput: WriteInput{Category: "Food"}},
+			{TransactionID: "tx-food", WriteInput: WriteInput{Payee: "New Bakery", PayeeSet: true}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EditBatch() error = %v", err)
+	}
+	if out.Count != 2 {
+		t.Fatalf("EditBatch() count = %d, want 2", out.Count)
+	}
+	if len(out.Items) != 0 || out.ItemsOmitted != 2 {
+		t.Fatalf("EditBatch() items = %d, omitted = %d, want 0/2", len(out.Items), out.ItemsOmitted)
+	}
+}
+
+func TestEchoItems_DefaultsBySize(t *testing.T) {
+	small := make([]TransactionResult, editBatchItemsEchoLimit)
+	if items, omitted := echoItems(small, nil); len(items) != len(small) || omitted != 0 {
+		t.Fatalf("echoItems(small) = %d/%d, want %d/0", len(items), omitted, len(small))
+	}
+
+	large := make([]TransactionResult, editBatchItemsEchoLimit+1)
+	if items, omitted := echoItems(large, nil); items != nil || omitted != len(large) {
+		t.Fatalf("echoItems(large) = %d/%d, want 0/%d", len(items), omitted, len(large))
+	}
+
+	yes := true
+	if items, omitted := echoItems(large, &yes); len(items) != len(large) || omitted != 0 {
+		t.Fatalf("echoItems(large, return_items=true) = %d/%d, want %d/0", len(items), omitted, len(large))
+	}
+}

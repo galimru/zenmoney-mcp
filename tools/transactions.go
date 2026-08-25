@@ -117,6 +117,7 @@ func RegisterTransactionTools(s *server.MCPServer, p *runtime.Provider) {
 				}),
 			),
 			mcp.WithNumber("chunk_size", mcp.Description("Rows per write request (default 100, maximum 200). Lower it if large batches time out.")),
+			mcp.WithBoolean("return_items", mcp.Description("Echo the saved rows back. Defaults to true for batches of 20 rows or fewer and false above that, where the echo is large and adds nothing the caller did not send; count and items_omitted always report what was saved.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return handleEditTransactions(ctx, p, req)
@@ -207,8 +208,9 @@ func handleEditTransactions(ctx context.Context, p *runtime.Provider, req mcp.Ca
 	}
 
 	out, err := transactions.NewService(p).EditBatch(ctx, transactions.EditBatchInput{
-		Items:     items,
-		ChunkSize: int(req.GetFloat("chunk_size", 0)),
+		Items:       items,
+		ChunkSize:   int(req.GetFloat("chunk_size", 0)),
+		ReturnItems: optionalBool(req, "return_items"),
 	})
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

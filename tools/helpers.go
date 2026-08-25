@@ -20,3 +20,17 @@ func structJSON(v any) (*mcp.CallToolResult, error) {
 	}
 	return mcp.NewToolResultText(string(out)), nil
 }
+
+// optionalBool reports an explicitly passed boolean argument, or nil when the
+// caller omitted it, so a service can tell "false" from "unset".
+func optionalBool(req mcp.CallToolRequest, name string) *bool {
+	raw, ok := req.GetArguments()[name]
+	if !ok || raw == nil {
+		return nil
+	}
+	v, ok := raw.(bool)
+	if !ok {
+		return nil
+	}
+	return &v
+}
